@@ -1,0 +1,26 @@
+# Dependencias y build
+node_modules/
+dist/
+build/
+.dart_tool/
+.flutter-plugins*
+.pub-cache/
+
+# Secretos y configuración local (NUNCA versionar)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Memoria del asistente (contiene credenciales de desarrollo; no es código)
+areas/
+index.md
+profile.md
+
+# Logs y sistema
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

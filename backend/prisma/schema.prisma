@@ -1,0 +1,294 @@
+// Este archivo usa Prisma Schema Language
+// Ref: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// PROPIETARIOS DE HOTELES
+// ============================================================
+model Owner {
+  id            String   @id @default(uuid())
+  fullName      String
+  email         String   @unique
+  phone         String   @unique       // Formato +58XXXXXXXXXX
+  cedula        String   @unique       // V-12345678 / E-12345678
+  passwordHash  String
+  twoFaSecret   String?                // TOTP para 2FA (fase posterior)
+  twoFaEnabled  Boolean  @default(false)
+  bankAccounts  Json     @default("[]") // [{bank, accountNumber, type}]
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  hotels        Hotel[]
+  refreshTokens RefreshToken[]
+
+  @@map("owners")
+}
+
+// ============================================================
+// HOTELES / MOTELES
+// ============================================================
+model Hotel {
+  id          String      @id @default(uuid())
+  ownerId     String
+  name        String
+  slug        String      @unique     // para URL amigable
+  address     String
+  city        String
+  state       String      @default("Venezuela")
+  latitude    Float?
+  longitude   Float?
+  phone       String?
+  description String?
+  coverPhoto  String?                 // URL S3
+  photos      Json        @default("[]") // array de URLs S3
+  status      HotelStatus @default(ACTIVE)
+  settings    Json        @default("{}") // config flexible: check-in hora, etc.
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  owner       Owner       @relation(fields: [ownerId], references: [id])
+  rooms       Room[]
+
+  @@map("hotels")
+}
+
+enum HotelStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// ============================================================
+// HABITACIONES
+// ============================================================
+model Room {
+  id             String       @id @default(uuid())
+  hotelId        String
+  name           String                // "101", "Suite A"
+  description    String?
+  type           RoomType     @default(STANDARD)
+  floorNumber    Int          @default(1)
+  pricePerHour   Decimal      @db.Decimal(10, 2)
+  pricePerNight  Decimal      @db.Decimal(10, 2)
+  currency       String       @default("USD")
+  amenities      Json         @default("[]") // ["WiFi","TV","Jacuzzi"]
+  photos         Json         @default("[]") // URLs S3
+  maxGuests      Int          @default(2)
+  status         RoomStatus   @default(AVAILABLE)
+  lockDeviceId   String?               // ID de cerradura IoT
+  sortOrder      Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  hotel          Hotel        @relation(fields: [hotelId], references: [id])
+  reservations   Reservation[]
+
+  @@map("rooms")
+}
+
+enum RoomType {
+  STANDARD
+  DELUXE
+  SUITE
+  PREMIUM
+}
+
+enum RoomStatus {
+  AVAILABLE
+  OCCUPIED
+  CLEANING
+  MAINTENANCE
+  DISABLED
+}
+
+// ============================================================
+// HUÉSPEDES
+// ============================================================
+model Guest {
+  id           String   @id @default(uuid())
+  fullName     String
+  phone        String   @unique       // +58XXXXXXXXXX
+  phoneHash    String   @unique       // hash del teléfono (búsquedas seguras)
+  cedula       String?  @unique       // V-12345678 (opcional pero recomendado)
+  passwordHash String
+  isVerified   Boolean  @default(false) // verificado por WhatsApp OTP
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  reservations   Reservation[]
+  otpCodes       OtpCode[]
+  refreshTokens  RefreshToken[]
+
+  @@map("guests")
+}
+
+// ============================================================
+// OTP (Verificación por WhatsApp)
+// ============================================================
+model OtpCode {
+  id          String    @id @default(uuid())
+  guestId     String?
+  phone       String                  // A quien se envió
+  code        String                  // 6 dígitos (en claro solo durante validación)
+  codeHash    String                  // hash del código
+  purpose     OtpPurpose
+  isUsed      Boolean   @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  guest       Guest?    @relation(fields: [guestId], references: [id])
+
+  @@map("otp_codes")
+}
+
+enum OtpPurpose {
+  PHONE_VERIFICATION
+  LOGIN
+  PASSWORD_RESET
+}
+
+// ============================================================
+// REFRESH TOKENS (JWT)
+// ============================================================
+model RefreshToken {
+  id          String   @id @default(uuid())
+  guestId     String?
+  ownerId     String?
+  tokenHash   String   @unique        // hash del refresh token
+  userAgent   String?
+  ip          String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  guest       Guest?   @relation(fields: [guestId], references: [id])
+  owner       Owner?   @relation(fields: [ownerId], references: [id])
+
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// RESERVAS
+// ============================================================
+model Reservation {
+  id              String            @id @default(uuid())
+  guestId         String
+  roomId          String
+  checkIn         DateTime
+  checkOut        DateTime
+  durationHours   Int
+  totalAmount     Decimal           @db.Decimal(10, 2)
+  currency        String            @default("USD")
+  status          ReservationStatus @default(PENDING_PAYMENT)
+  notes           String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  guest           Guest             @relation(fields: [guestId], references: [id])
+  room            Room              @relation(fields: [roomId], references: [id])
+  payment         Payment?
+  accessToken     AccessToken?
+
+  @@map("reservations")
+}
+
+enum ReservationStatus {
+  PENDING_PAYMENT    // Esperando pago
+  PAYMENT_PENDING_REVIEW // Pago en revisión (Pago Móvil / Zelle)
+  ACTIVE             // Pago confirmado, huésped puede entrar
+  COMPLETED          // Check-out realizado
+  CANCELLED          // Cancelada
+  EXPIRED            // Tiempo expirado sin check-out
+}
+
+// ============================================================
+// PAGOS
+// ============================================================
+model Payment {
+  id              String        @id @default(uuid())
+  reservationId   String        @unique
+  gateway         PaymentGateway
+  gatewayRef      String?               // referencia del gateway
+  amount          Decimal       @db.Decimal(10, 2)
+  currency        String        @default("USD")
+  status          PaymentStatus @default(PENDING)
+  metadata        Json          @default("{}") // datos extra del gateway
+  confirmedAt     DateTime?
+  confirmedBy     String?               // "system" o ID del propietario
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  reservation     Reservation   @relation(fields: [reservationId], references: [id])
+
+  @@map("payments")
+}
+
+enum PaymentGateway {
+  PAGO_MOVIL      // Transferencia bancaria móvil Venezuela
+  ZELLE           // Zelle USD
+  BINANCE_PAY     // Crypto / Binance
+  CASH            // Efectivo (registrado manualmente por propietario)
+}
+
+enum PaymentStatus {
+  PENDING           // Iniciado, esperando acción
+  PENDING_REVIEW    // Comprobante enviado, esperando validación
+  APPROVED          // Pago confirmado
+  FAILED            // Falló
+  REFUNDED          // Devuelto
+}
+
+// ============================================================
+// TOKENS QR DE ACCESO
+// ============================================================
+model AccessToken {
+  id              String      @id @default(uuid())
+  reservationId   String      @unique
+  tokenHash       String      @unique     // hash del token real (nunca guardamos el raw)
+  validFrom       DateTime
+  validUntil      DateTime
+  usedCount       Int         @default(0)
+  maxUses         Int         @default(10) // entradas + salidas
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+
+  reservation     Reservation @relation(fields: [reservationId], references: [id])
+  accessLogs      AccessLog[]
+
+  @@map("access_tokens")
+}
+
+// ============================================================
+// LOG DE ACCESOS (Cerradura)
+// ============================================================
+model AccessLog {
+  id              String      @id @default(uuid())
+  accessTokenId   String
+  event           AccessEvent
+  deviceId        String?               // ID de la cerradura
+  ipAddress       String?
+  metadata        Json        @default("{}")
+  createdAt       DateTime    @default(now())
+
+  accessToken     AccessToken @relation(fields: [accessTokenId], references: [id])
+
+  @@map("access_logs")
+}
+
+enum AccessEvent {
+  OPEN        // Puerta abierta
+  CLOSE       // Puerta cerrada
+  DENIED      // Acceso denegado
+  EXPIRED     // Token expirado al intentar usar
+  CHECKOUT    // Check-out manual desde app
+}
