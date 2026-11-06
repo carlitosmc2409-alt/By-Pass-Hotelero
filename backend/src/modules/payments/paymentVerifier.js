@@ -2,6 +2,7 @@ const { prisma } = require('../../config/database')
 const env = require('../../config/env')
 const { decryptField } = require('../../utils/fieldCrypto')
 const { round2 } = require('../../utils/rates')
+const { extractBdvNotificationWithAI } = require('./bdvAiExtractor')
 
 function normalizeRef(ref) {
   return String(ref || '').replace(/\D/g, '')
@@ -34,9 +35,19 @@ function normalizeVePhone(raw) {
 function parseBdvNotificationText(rawText) {
   if (!rawText || typeof rawText !== 'string') return {}
 
+  // Separar cualquier segmento "Concepto:" o "Motivo:" escrito por el pagador
+  // para que un texto malicioso en el concepto nunca contamine los regex de monto/referencia
+  let headerText = rawText
+  let concept = null
+  const conceptMatch = rawText.match(/\b(?:Concepto|Motivo)\s*[:.-]\s*(.+)$/i)
+  if (conceptMatch) {
+    concept = conceptMatch[1].trim()
+    headerText = rawText.slice(0, conceptMatch.index).trim()
+  }
+
   // Monto: "Bs. 1.500,00" o "Bs 1500.00" o "Bs.1500,50"
   let amountVes = null
-  const amountMatch = rawText.match(/Bs\.?\s*([0-9.,]+)/i)
+  const amountMatch = headerText.match(/Bs\.?\s*([0-9.,]+)/i)
   if (amountMatch) {
     const rawNum = amountMatch[1].trim()
     // Si tiene coma decimal estilo venezolano (1.500,00)
@@ -49,19 +60,19 @@ function parseBdvNotificationText(rawText) {
 
   // Referencia: "Ref: 00987654" o "Ref 987654" o "Referencia: 12345678"
   let reference = null
-  const refMatch = rawText.match(/Ref(?:erencia)?[:.\s#-]*([0-9]{4,20})/i)
+  const refMatch = headerText.match(/Ref(?:erencia)?[:.\s#-]*([0-9]{4,20})/i)
   if (refMatch) {
     reference = normalizeRef(refMatch[1])
   }
 
   // Teléfono venezolano: 0412/0414/0424/0416/0426/+58...
   let payerPhone = null
-  const phoneMatch = rawText.match(/(?:\+?58|0)?\s*(4(?:12|14|24|16|26))[\s-]*([0-9]{7})/)
+  const phoneMatch = headerText.match(/(?:\+?58|0)?\s*(4(?:12|14|24|16|26))[\s-]*([0-9]{7})/)
   if (phoneMatch) {
     payerPhone = `+58${phoneMatch[1]}${phoneMatch[2]}`
   }
 
-  return { amountVes, reference, payerPhone }
+  return { amountVes, reference, payerPhone, concept }
 }
 
 /**
@@ -240,11 +251,37 @@ async function reconcilePayment(paymentId, options = {}) {
  */
 async function recordBankEvent(input) {
   const parsed = input.rawText ? parseBdvNotificationText(input.rawText) : {}
-  const reference = normalizeRef(input.reference || parsed.reference)
-  const amountVes = input.amountVes !== undefined ? round2(input.amountVes) : parsed.amountVes
-  const payerPhone = normalizeVePhone(input.payerPhone || parsed.payerPhone)
+  let reference = normalizeRef(input.reference || parsed.reference)
+  let amountVes = input.amountVes !== undefined ? round2(input.amountVes) : parsed.amountVes
+  let payerPhone = normalizeVePhone(input.payerPhone || parsed.payerPhone)
   const payerCedula = input.payerCedula ? normalizeDigits(input.payerCedula) : null
-  const payerBank = input.payerBank || null
+  let payerBank = input.payerBank || null
+  let concept = input.concept || parsed.concept || null
+  let usedAiFallback = false
+
+  // Paso B: Si el texto crudo de la notificación cambió de formato y el Regex no
+  // logró extraer la referencia o el monto, activamos el Agente IA (Gemini Structured Outputs)
+  if (input.rawText && (!reference || reference.length < 4 || !amountVes || amountVes <= 0)) {
+    const aiExtracted = await extractBdvNotificationWithAI(input.rawText)
+    if (aiExtracted.usedAiFallback) {
+      usedAiFallback = true
+      if (!input.reference && aiExtracted.reference) {
+        reference = normalizeRef(aiExtracted.reference)
+      }
+      if (input.amountVes === undefined && aiExtracted.amountVes) {
+        amountVes = aiExtracted.amountVes
+      }
+      if (!input.payerPhone && aiExtracted.payerPhone) {
+        payerPhone = normalizeVePhone(aiExtracted.payerPhone)
+      }
+      if (!input.payerBank && aiExtracted.payerBank) {
+        payerBank = aiExtracted.payerBank
+      }
+      if (!input.concept && aiExtracted.concept) {
+        concept = aiExtracted.concept
+      }
+    }
+  }
 
   if (!reference || reference.length < 4) {
     const err = new Error('No se pudo extraer una referencia válida de la notificación bancaria')
@@ -266,7 +303,7 @@ async function recordBankEvent(input) {
       payerPhone,
       payerCedula,
       payerBank,
-      concept: input.concept || null,
+      concept,
       rawText: input.rawText || null,
     },
   })
@@ -288,7 +325,7 @@ async function recordBankEvent(input) {
     reconciliation = await reconcilePayment(candidatePayment.id, { skipAutoSimulate: true })
   }
 
-  return { bankEvent, reconciliation }
+  return { bankEvent, reconciliation, usedAiFallback }
 }
 
 module.exports = {

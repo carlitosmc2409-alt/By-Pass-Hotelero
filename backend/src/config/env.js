@@ -28,6 +28,10 @@ const env = {
   PAYMENT_HOLD_MINUTES: parseInt(process.env.PAYMENT_HOLD_MINUTES) || 10,
   SIMULATED_BCV_RATE: parseFloat(process.env.SIMULATED_BCV_RATE) || 0,
 
+  // Agente extractor IA (Gemini API) — fallback cuando cambia el formato de notificación BDV
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '',
+  GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+
   // WhatsApp
   WHATSAPP_PROVIDER: process.env.WHATSAPP_PROVIDER || 'twilio',
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,

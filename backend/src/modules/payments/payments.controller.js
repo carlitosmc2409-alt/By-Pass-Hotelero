@@ -129,13 +129,14 @@ async function handleBdvNotificationWebhook(request, reply) {
   }
 
   const data = bdvNotificationSchema.parse(request.body)
-  const { bankEvent, reconciliation } = await recordBankEvent(data)
+  const { bankEvent, reconciliation, usedAiFallback } = await recordBankEvent(data)
 
   return reply.status(201).send({
     bankEventId: bankEvent.id,
     amountVes: Number(bankEvent.amountVes),
     reference: bankEvent.reference,
     payerPhone: bankEvent.payerPhone,
+    usedAiFallback,
     reconciliation,
   })
 }
