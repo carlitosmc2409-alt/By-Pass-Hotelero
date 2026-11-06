@@ -1,4 +1,5 @@
 const { prisma } = require('../../config/database')
+const { generateHotelBridgeToken } = require('../../utils/crypto')
 const { z } = require('zod')
 
 const paymentInfoSchema = z.object({
@@ -242,6 +243,7 @@ async function handleOwnerDashboard(request, reply) {
       city: hotel.city,
       status: hotel.status,
       paymentInfo: hotel.paymentInfo,
+      bdvBridgeToken: generateHotelBridgeToken(hotel.id),
     },
     metrics: {
       totalRooms: roomsFormatted.length,

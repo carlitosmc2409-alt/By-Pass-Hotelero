@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../core/bdv_bridge_service.dart';
 import '../core/owner_api.dart';
 import '../core/owner_theme.dart';
 
@@ -16,7 +17,8 @@ class OwnerDashboardScreen extends StatefulWidget {
   State<OwnerDashboardScreen> createState() => _OwnerDashboardScreenState();
 }
 
-class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
+class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
+    with WidgetsBindingObserver {
   static const Map<String, String> _banks = {
     '0102': '0102 · Banco de Venezuela (Piloto Automático)',
     '0134': '0134 · Banesco',
@@ -25,6 +27,16 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
     '0172': '0172 · Bancamiga',
     '0191': '0191 · BNC',
   };
+
+  final BdvBridgeService _bridgeService = BdvBridgeService();
+  BdvBridgeStatus _bridgeStatus = BdvBridgeStatus.unsupported();
+  final _bridgeApiUrlCtrl =
+      TextEditingController(text: OwnerApiClient.baseUrl);
+  final _simulatedPushCtrl = TextEditingController(
+    text: 'PagomovilBDV recibido por Bs. 1.000,00 del 0412-9876543 Ref: 00334455',
+  );
+  bool _bridgeAllowTestSources = true;
+  bool _sendingSimulatedPush = false;
 
   List<Map<String, dynamic>> _hotels = [];
   String? _selectedHotelId;
@@ -43,15 +55,39 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadInitial();
+    _refreshBridgeStatus();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _bridgeApiUrlCtrl.dispose();
+    _simulatedPushCtrl.dispose();
     _payPhoneCtrl.dispose();
     _payIdCtrl.dispose();
     _payHolderCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshBridgeStatus();
+    }
+  }
+
+  Future<void> _refreshBridgeStatus() async {
+    final st = await _bridgeService.getStatus();
+    if (!mounted) return;
+    setState(() {
+      _bridgeStatus = st;
+      if (st.apiBaseUrl.isNotEmpty) {
+        _bridgeApiUrlCtrl.text = st.apiBaseUrl;
+      }
+      _bridgeAllowTestSources = st.allowTestSources;
+    });
   }
 
   Future<void> _loadInitial() async {
@@ -418,7 +454,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
     final hotelName = (hotel['name'] ?? 'Panel del Propietario').toString();
 
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: Row(
@@ -493,6 +529,8 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
             const SizedBox(width: 6),
           ],
           bottom: const TabBar(
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
             indicatorColor: OwnerTheme.primary,
             labelColor: OwnerTheme.textPrimary,
             unselectedLabelColor: OwnerTheme.textSecondary,
@@ -504,6 +542,10 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
               Tab(
                 icon: Icon(Icons.bolt_rounded, size: 20),
                 text: 'Pagos y BDV',
+              ),
+              Tab(
+                icon: Icon(Icons.phonelink_ring_rounded, size: 20),
+                text: 'Puente BDV',
               ),
               Tab(
                 icon: Icon(Icons.account_balance_rounded, size: 20),
@@ -553,6 +595,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
       children: [
         _buildRoomsTab(),
         _buildFinanceTab(),
+        _buildBdvBridgeTab(),
         _buildPaymentSettingsTab(),
       ],
     );
@@ -1172,6 +1215,304 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen> {
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _configureAndroidBridge(bool enabled) async {
+    final hotel = (_dashboard?['hotel'] as Map<String, dynamic>?) ?? {};
+    final hotelId = (hotel['id'] ?? '').toString();
+    final bridgeToken = (hotel['bdvBridgeToken'] ?? '').toString();
+    final apiUrl = _bridgeApiUrlCtrl.text.trim();
+
+    if (hotelId.isEmpty || bridgeToken.isEmpty || apiUrl.isEmpty) {
+      _showSnack('Faltan credenciales del puente o URL del servidor.', isError: true);
+      return;
+    }
+
+    try {
+      final updated = await _bridgeService.configure(
+        enabled: enabled,
+        apiBaseUrl: apiUrl,
+        hotelId: hotelId,
+        bridgeToken: bridgeToken,
+        allowTestSources: _bridgeAllowTestSources,
+      );
+      if (!mounted) return;
+      setState(() => _bridgeStatus = updated);
+      _showSnack(
+        enabled
+            ? 'Puente Android BDV activado en segundo plano.'
+            : 'Puente Android BDV pausado.',
+      );
+    } catch (e) {
+      _showSnack(e.toString(), isError: true);
+    }
+  }
+
+  Future<void> _sendSimulatedBdvPush() async {
+    final hotel = (_dashboard?['hotel'] as Map<String, dynamic>?) ?? {};
+    final hotelId = (hotel['id'] ?? '').toString();
+    final bridgeToken = (hotel['bdvBridgeToken'] ?? '').toString();
+    final rawText = _simulatedPushCtrl.text.trim();
+
+    if (hotelId.isEmpty || bridgeToken.isEmpty || rawText.isEmpty) {
+      _showSnack('Escribe el texto de notificación BDV a enviar.', isError: true);
+      return;
+    }
+
+    setState(() => _sendingSimulatedPush = true);
+    try {
+      final res = await widget.api.sendBdvPushWithBridgeToken(
+        hotelId: hotelId,
+        bridgeToken: bridgeToken,
+        rawText: rawText,
+      );
+      final rec = res['reconciliation'] as Map<String, dynamic>?;
+      final matched = rec?['matched'] == true;
+      _showSnack(
+        matched
+            ? 'Push BDV conciliado al instante: Reserva aprobada y llave QR activa.'
+            : 'Push BDV registrado (Bs. ${res['amountVes']} · Ref ${res['reference']}). Esperando reporte o reserva.',
+      );
+      await _refreshDashboard();
+    } catch (e) {
+      _showSnack(e.toString(), isError: true);
+    } finally {
+      if (mounted) {
+        setState(() => _sendingSimulatedPush = false);
+      }
+    }
+  }
+
+  Widget _buildBdvBridgeTab() {
+    final hotel = (_dashboard?['hotel'] as Map<String, dynamic>?) ?? {};
+    final isAndroid = BdvBridgeService.isAndroidNative;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 680),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(22),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.phonelink_ring_rounded,
+                            color: OwnerTheme.primary,
+                            size: 26,
+                          ),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'Agente Lector Android (NotificationListenerService)',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: (isAndroid &&
+                                          _bridgeStatus.permissionGranted &&
+                                          _bridgeStatus.enabled
+                                      ? OwnerTheme.available
+                                      : OwnerTheme.cleaning)
+                                  .withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Text(
+                              isAndroid
+                                  ? (_bridgeStatus.permissionGranted &&
+                                          _bridgeStatus.enabled
+                                      ? 'Escuchando en 2do Plano'
+                                      : 'Configuración Pendiente')
+                                  : 'Modo Navegador Web',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: isAndroid &&
+                                        _bridgeStatus.permissionGranted &&
+                                        _bridgeStatus.enabled
+                                    ? OwnerTheme.available
+                                    : OwnerTheme.cleaning,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        isAndroid
+                            ? 'Este dispositivo Android captura las notificaciones push entrantes de BDVApp / PagoClave y las envía firmadas con el token exclusivo de "${hotel['name'] ?? 'tu hotel'}" sin requerir que la pantalla esté encendida.'
+                            : 'Estás viendo el Panel en Web. En el teléfono Android donde recibes tus Pago Móvil del Banco de Venezuela (0102), instala el APK de "StayPass Panel": el servicio nativo BdvNotificationListenerService leerá cada push en segundo plano y lo enviará con token HMAC exclusivo por hotel.',
+                        style: const TextStyle(
+                          color: OwnerTheme.textSecondary,
+                          fontSize: 13,
+                        ),
+                      ),
+                      if (isAndroid) ...[
+                        const SizedBox(height: 18),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              _bridgeStatus.permissionGranted
+                                  ? 'Permiso de Acceso a Notificaciones: Concedido'
+                                  : 'Permiso de Acceso a Notificaciones: No concedido',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: _bridgeStatus.permissionGranted
+                                    ? OwnerTheme.available
+                                    : OwnerTheme.cleaning,
+                              ),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () =>
+                                  _bridgeService.openNotificationSettings(),
+                              icon: const Icon(Icons.settings_outlined, size: 16),
+                              label: const Text('Permisos Android'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        TextField(
+                          controller: _bridgeApiUrlCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'URL del Servidor API (ej: http://192.168.1.10:3000/api/v1)',
+                            prefixIcon: Icon(Icons.cloud_outlined),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text(
+                            'Aceptar notificaciones de prueba (WhatsApp/SMS con formato BDV)',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                          value: _bridgeAllowTestSources,
+                          onChanged: (val) {
+                            setState(() => _bridgeAllowTestSources = val);
+                          },
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: OwnerTheme.available,
+                              ),
+                              onPressed: () => _configureAndroidBridge(true),
+                              icon: const Icon(Icons.play_arrow_rounded),
+                              label: const Text('Activar Puente en este Teléfono'),
+                            ),
+                            if (_bridgeStatus.enabled)
+                              OutlinedButton.icon(
+                                onPressed: () => _configureAndroidBridge(false),
+                                icon: const Icon(Icons.pause_rounded),
+                                label: const Text('Pausar'),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          'Notificaciones reenviadas: ${_bridgeStatus.forwardedCount}'
+                          '${_bridgeStatus.lastEventSummary.isNotEmpty ? ' · Última: ${_bridgeStatus.lastEventSummary} (${_bridgeStatus.lastForwardedAt})' : ''}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: OwnerTheme.textSecondary,
+                          ),
+                        ),
+                        if (_bridgeStatus.lastError.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Último aviso de red: ${_bridgeStatus.lastError}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: OwnerTheme.occupied,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(22),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.bolt_rounded, color: OwnerTheme.available),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Simulador en Vivo de Push BDV (Token de Puente del Hotel)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Dispara exactamente la misma petición firmada (x-hotel-bridge-token) que envía el servicio Android cuando entra un Pago Móvil al teléfono receptor. '
+                        'Incluye extracción híbrida (Regex + respaldo Gemini Structured Outputs si el texto varía).',
+                        style: TextStyle(
+                          color: OwnerTheme.textSecondary,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: _simulatedPushCtrl,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: 'Texto crudo de la notificación push BDV',
+                          prefixIcon: Icon(Icons.notifications_active_outlined),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      ElevatedButton.icon(
+                        onPressed:
+                            _sendingSimulatedPush ? null : _sendSimulatedBdvPush,
+                        icon: _sendingSimulatedPush
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.send_to_mobile_rounded),
+                        label: const Text('Disparar Push BDV al Webhook'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

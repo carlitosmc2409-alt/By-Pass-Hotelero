@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../core/api_client.dart';
 import '../core/theme.dart';
 import '../models/models.dart';
@@ -175,9 +176,25 @@ class _QrStayScreenState extends State<QrStayScreen> {
                       ],
                       const SizedBox(height: 18),
                       ElevatedButton.icon(
+                        onPressed: () async {
+                          await Clipboard.setData(ClipboardData(text: qr.rawToken));
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Token QR copiado al portapapeles para probar en el Lector de Puerta.',
+                              ),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.copy_rounded),
+                        label: const Text('Copiar Token para Lector QR de Puerta'),
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
                         onPressed: _simulateDoorOpen,
                         icon: const Icon(Icons.sensor_door_outlined),
-                        label: const Text('Simular escaneo QR en la cerradura'),
+                        label: const Text('Prueba rápida de apertura desde aquí'),
                       ),
                       const SizedBox(height: 12),
                       OutlinedButton.icon(

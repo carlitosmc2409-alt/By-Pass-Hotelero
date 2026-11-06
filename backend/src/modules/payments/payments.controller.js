@@ -1,5 +1,6 @@
 const { prisma } = require('../../config/database')
 const env = require('../../config/env')
+const { validateHotelBridgeToken } = require('../../utils/crypto')
 const {
   normalizeRef,
   reconcilePayment,
@@ -120,11 +121,19 @@ async function handleSubmitProof(request, reply) {
 // o inyectada por el simulador, y concilia automáticamente si el pago ya fue reportado.
 async function handleBdvNotificationWebhook(request, reply) {
   const secret = request.headers['x-webhook-secret']
-  if (!secret || secret !== env.PAGO_MOVIL_WEBHOOK_SECRET) {
+  const bridgeToken = request.headers['x-hotel-bridge-token']
+  const rawHotelId = request.body && typeof request.body.hotelId === 'string'
+    ? request.body.hotelId
+    : null
+
+  const secretValid = Boolean(secret && secret === env.PAGO_MOVIL_WEBHOOK_SECRET)
+  const bridgeValid = Boolean(rawHotelId && bridgeToken && validateHotelBridgeToken(rawHotelId, bridgeToken))
+
+  if (!secretValid && !bridgeValid) {
     return reply.status(401).send({
       statusCode: 401,
       error: 'Unauthorized',
-      message: 'Secreto de webhook inválido',
+      message: 'Credenciales de webhook o puente Android BDV inválidas',
     })
   }
 

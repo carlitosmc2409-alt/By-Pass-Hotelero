@@ -149,4 +149,24 @@ class OwnerApiClient {
     );
     await _decode(res);
   }
+
+  Future<Map<String, dynamic>> sendBdvPushWithBridgeToken({
+    required String hotelId,
+    required String bridgeToken,
+    required String rawText,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/payments/webhook/bdv-notification'),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-hotel-bridge-token': bridgeToken,
+      },
+      body: jsonEncode({
+        'hotelId': hotelId,
+        'rawText': rawText,
+        'source': 'BDV_NOTIFICATION',
+      }),
+    );
+    return (await _decode(res)) as Map<String, dynamic>;
+  }
 }

@@ -79,10 +79,35 @@ function hashQrToken(rawToken) {
   return crypto.createHash('sha256').update(rawToken).digest('hex')
 }
 
+/**
+ * Genera un token HMAC determinista exclusivo por hotel para autenticar
+ * el puente Android lector de notificaciones BDV sin exponer el secreto global.
+ */
+function generateHotelBridgeToken(hotelId) {
+  return crypto
+    .createHmac('sha256', env.PAGO_MOVIL_WEBHOOK_SECRET)
+    .update(`bdv-bridge:${String(hotelId)}`)
+    .digest('hex')
+}
+
+/**
+ * Valida en tiempo constante el token de puente Android para un hotel específico.
+ */
+function validateHotelBridgeToken(hotelId, receivedToken) {
+  if (!hotelId || typeof receivedToken !== 'string') return false
+  const expectedHex = generateHotelBridgeToken(hotelId)
+  const received = Buffer.from(receivedToken, 'hex')
+  const expected = Buffer.from(expectedHex, 'hex')
+  if (received.length !== expected.length) return false
+  return crypto.timingSafeEqual(received, expected)
+}
+
 module.exports = {
   hashValue,
   generateOtp,
   generateQrToken,
   validateQrTokenSignature,
   hashQrToken,
+  generateHotelBridgeToken,
+  validateHotelBridgeToken,
 }

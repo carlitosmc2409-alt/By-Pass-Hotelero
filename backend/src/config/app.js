@@ -25,6 +25,13 @@ async function buildApp() {
       ? ['https://tudominio.com'] // reemplazar en producción
       : true,
     credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-hotel-bridge-token',
+      'x-webhook-secret',
+    ],
   })
 
   await app.register(rateLimit, {

@@ -77,7 +77,17 @@ async function validateQrToken(rawToken, deviceId = null) {
   const tokenHash = hashQrToken(rawToken)
   const accessToken = await prisma.accessToken.findUnique({
     where: { tokenHash },
-    include: { reservation: { include: { room: true } } },
+    include: {
+      reservation: {
+        include: {
+          room: {
+            include: {
+              hotel: { select: { id: true, name: true } },
+            },
+          },
+        },
+      },
+    },
   })
 
   if (!accessToken) {
@@ -114,19 +124,62 @@ async function validateQrToken(rawToken, deviceId = null) {
     return { allowed: false, message: 'Número máximo de accesos alcanzado' }
   }
 
+  // 5.5 Verificar correspondencia de cerradura específica de habitación vs barrera de garaje
+  const room = accessToken.reservation.room
+  const normalizedDevice = typeof deviceId === 'string' ? deviceId.trim().toLowerCase() : ''
+  const isSharedGate =
+    !normalizedDevice ||
+    normalizedDevice.startsWith('garaje') ||
+    normalizedDevice.startsWith('barrera') ||
+    normalizedDevice.startsWith('gate') ||
+    normalizedDevice.startsWith('lock-demo')
+
+  if (!isSharedGate) {
+    const slugRoomLock = 'lock-' + String(room.name).trim().toLowerCase().replace(/\s+/g, '-')
+    const configuredLock = room.lockDeviceId ? String(room.lockDeviceId).trim().toLowerCase() : null
+    const matchesRoom =
+      normalizedDevice === slugRoomLock ||
+      normalizedDevice === String(room.id).toLowerCase() ||
+      (configuredLock && normalizedDevice === configuredLock)
+
+    if (!matchesRoom) {
+      await logAccessEvent(accessToken.id, 'DENIED', deviceId, {
+        reason: 'wrong_room_lock',
+        expectedRoom: room.name,
+      })
+      return {
+        allowed: false,
+        message: `Puerta incorrecta: este QR pertenece a la habitación ${room.name}`,
+        expectedRoom: room.name,
+      }
+    }
+  }
+
   // 6. ✅ Acceso permitido — incrementar contador
-  await prisma.accessToken.update({
+  const updatedToken = await prisma.accessToken.update({
     where: { id: accessToken.id },
     data: { usedCount: { increment: 1 } },
   })
 
   await logAccessEvent(accessToken.id, 'OPEN', deviceId)
 
+  const isGarageGate =
+    normalizedDevice.startsWith('garaje') ||
+    normalizedDevice.startsWith('barrera') ||
+    normalizedDevice.startsWith('gate')
+
   return {
     allowed: true,
-    message: 'Acceso permitido',
+    message: isGarageGate
+      ? `Barrera abierta · Dirígete a Habitación ${room.name}`
+      : `Cerradura desbloqueada · Habitación ${room.name}`,
     reservationId: accessToken.reservationId,
-    roomName: accessToken.reservation.room.name,
+    hotelName: room.hotel?.name || '',
+    roomName: room.name,
+    deviceId: deviceId || null,
+    accessZone: isGarageGate ? 'GARAGE_GATE' : 'ROOM_DOOR',
+    usedCount: updatedToken.usedCount,
+    maxUses: updatedToken.maxUses,
     validUntil: accessToken.validUntil,
   }
 }
