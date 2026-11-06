@@ -3,6 +3,7 @@ const env = require('../../config/env')
 const { validateHotelBridgeToken } = require('../../utils/crypto')
 const {
   normalizeRef,
+  activateApprovedPaymentInTx,
   reconcilePayment,
   recordBankEvent,
 } = require('./paymentVerifier')
@@ -93,9 +94,12 @@ async function handleSubmitProof(request, reply) {
       return reply.send({
         status: 'APPROVED',
         autoVerified: true,
-        reservationId: payment.reservationId,
+        isExtension: Boolean(result.isExtension),
+        reservationId: result.reservationId || payment.reservationId,
         bankEventId: result.bankEventId,
-        message: 'Pago verificado automáticamente. Tu reserva está activa y ya puedes obtener tu QR.',
+        message: result.isExtension
+          ? 'Extensión verificada automáticamente. El horario de tu llave QR ya fue ampliado.'
+          : 'Pago verificado automáticamente. Tu reserva está activa y ya puedes obtener tu QR.',
       })
     }
 
@@ -169,28 +173,20 @@ async function handleConfirmPayment(request, reply) {
     return reply.status(400).send({ message: 'El pago ya fue procesado' })
   }
 
-  const [, updatedReservation] = await prisma.$transaction([
-    prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        status: 'APPROVED',
-        confirmedAt: new Date(),
-        confirmedBy: request.user.id,
-      },
-    }),
-    prisma.reservation.update({
-      where: { id: payment.reservationId },
-      data: { status: 'ACTIVE' },
-    }),
-    prisma.room.update({
-      where: { id: payment.reservation.roomId },
-      data: { status: 'OCCUPIED' },
-    }),
-  ])
+  const activation = await prisma.$transaction(async (tx) =>
+    activateApprovedPaymentInTx(tx, {
+      payment,
+      reservation: payment.reservation,
+      confirmedBy: request.user.id,
+    })
+  )
 
   return reply.send({
-    message: 'Pago confirmado. La reserva está activa y el huésped ya puede obtener su QR.',
-    reservationId: updatedReservation.id,
+    message: activation.isExtension
+      ? 'Extensión confirmada. El horario del QR del huésped fue ampliado.'
+      : 'Pago confirmado. La reserva está activa y el huésped ya puede obtener su QR.',
+    reservationId: activation.targetReservationId,
+    isExtension: activation.isExtension,
   })
 }
 

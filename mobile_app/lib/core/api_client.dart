@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
 
 class ApiException implements Exception {
@@ -13,17 +14,77 @@ class ApiException implements Exception {
 }
 
 class ApiClient {
-  // En Android Emulator usar http://10.0.2.2:3000/api/v1
-  // En Web / Desktop usar http://localhost:3000/api/v1
+  static const _kAccessKey = 'staypass_guest_access_token';
+  static const _kRefreshKey = 'staypass_guest_refresh_token';
+
   static String baseUrl = const String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'http://localhost:3000/api/v1',
   );
 
   String? _accessToken;
+  String? _refreshToken;
+
+  bool get hasToken => _accessToken != null && _accessToken!.isNotEmpty;
 
   void setAccessToken(String? token) {
     _accessToken = token;
+    if (token == null) {
+      _refreshToken = null;
+      _clearStoredTokens();
+    }
+  }
+
+  Future<bool> restoreSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final access = prefs.getString(_kAccessKey);
+      final refresh = prefs.getString(_kRefreshKey);
+      if (access != null && access.isNotEmpty) {
+        _accessToken = access;
+        _refreshToken = refresh;
+        return true;
+      }
+    } catch (_) {
+      // Entorno de pruebas sin plugin nativo
+    }
+    return false;
+  }
+
+  Future<void> _persistTokens(String access, String? refresh) async {
+    _accessToken = access;
+    if (refresh != null) _refreshToken = refresh;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kAccessKey, access);
+      if (refresh != null) {
+        await prefs.setString(_kRefreshKey, refresh);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _clearStoredTokens() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kAccessKey);
+      await prefs.remove(_kRefreshKey);
+    } catch (_) {}
+  }
+
+  Future<void> logout() async {
+    final rt = _refreshToken;
+    _accessToken = null;
+    _refreshToken = null;
+    await _clearStoredTokens();
+    if (rt != null && rt.isNotEmpty) {
+      try {
+        await http.post(
+          Uri.parse('$baseUrl/auth/logout'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'refreshToken': rt}),
+        );
+      } catch (_) {}
+    }
   }
 
   Map<String, String> _headers({bool jsonBody = true}) {
@@ -33,15 +94,51 @@ class ApiClient {
     };
   }
 
-  Future<Map<String, dynamic>> _decodeObj(http.Response res) async {
+  Future<bool> _tryRefresh() async {
+    final rt = _refreshToken;
+    if (rt == null || rt.isEmpty) return false;
+    try {
+      final res = await http.post(
+        Uri.parse('$baseUrl/auth/refresh'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'refreshToken': rt}),
+      );
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        final newAccess = data['accessToken'] as String?;
+        final newRefresh = data['refreshToken'] as String?;
+        if (newAccess != null && newAccess.isNotEmpty) {
+          await _persistTokens(newAccess, newRefresh ?? rt);
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  Future<http.Response> _authorizedSend(
+    Future<http.Response> Function() requestFn,
+  ) async {
+    var res = await requestFn();
+    if (res.statusCode == 401 && await _tryRefresh()) {
+      res = await requestFn();
+    }
+    return res;
+  }
+
+  Future<dynamic> _decodeAny(http.Response res) async {
     final decoded = res.body.isNotEmpty ? jsonDecode(res.body) : {};
     if (res.statusCode >= 200 && res.statusCode < 300) {
-      return decoded as Map<String, dynamic>;
+      return decoded;
     }
     final msg = (decoded is Map && decoded['message'] != null)
         ? decoded['message'].toString()
         : 'Error HTTP ${res.statusCode}';
     throw ApiException(res.statusCode, msg);
+  }
+
+  Future<Map<String, dynamic>> _decodeObj(http.Response res) async {
+    return (await _decodeAny(res)) as Map<String, dynamic>;
   }
 
   Future<List<BankOption>> fetchBanks() async {
@@ -113,17 +210,39 @@ class ApiClient {
     );
     final data = await _decodeObj(res);
     final token = data['accessToken'] as String;
-    _accessToken = token;
+    final refresh = data['refreshToken'] as String?;
+    await _persistTokens(token, refresh);
     return token;
   }
 
   Future<GuestProfile> fetchGuestProfile() async {
-    final res = await http.get(
-      Uri.parse('$baseUrl/auth/guest/me'),
-      headers: _headers(jsonBody: false),
+    final res = await _authorizedSend(
+      () => http.get(
+        Uri.parse('$baseUrl/auth/guest/me'),
+        headers: _headers(jsonBody: false),
+      ),
     );
     final data = await _decodeObj(res);
     return GuestProfile.fromJson(data);
+  }
+
+  Future<void> updatePaymentProfile({
+    required String paymentBank,
+    required String paymentPhone,
+    required String paymentCedula,
+  }) async {
+    final res = await _authorizedSend(
+      () => http.put(
+        Uri.parse('$baseUrl/auth/guest/payment-profile'),
+        headers: _headers(),
+        body: jsonEncode({
+          'paymentBank': paymentBank,
+          'paymentPhone': paymentPhone,
+          'paymentCedula': paymentCedula,
+        }),
+      ),
+    );
+    await _decodeObj(res);
   }
 
   Future<List<HotelModel>> fetchHotels() async {
@@ -147,19 +266,62 @@ class ApiClient {
     return HotelModel.fromJson(data);
   }
 
+  Future<List<GuestReservationSummary>> fetchMyReservations() async {
+    final res = await _authorizedSend(
+      () => http.get(
+        Uri.parse('$baseUrl/reservations/my'),
+        headers: _headers(jsonBody: false),
+      ),
+    );
+    final list = (await _decodeAny(res)) as List<dynamic>;
+    return list
+        .map((e) => GuestReservationSummary.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> fetchReservationDetail(String reservationId) async {
+    final res = await _authorizedSend(
+      () => http.get(
+        Uri.parse('$baseUrl/reservations/$reservationId'),
+        headers: _headers(jsonBody: false),
+      ),
+    );
+    return _decodeObj(res);
+  }
+
   Future<CreatedReservation> createReservation({
     required String roomId,
     required int durationHours,
   }) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/reservations'),
-      headers: _headers(),
-      body: jsonEncode({
-        'roomId': roomId,
-        'checkIn': DateTime.now().toUtc().toIso8601String(),
-        'durationHours': durationHours,
-        'gateway': 'PAGO_MOVIL',
-      }),
+    final res = await _authorizedSend(
+      () => http.post(
+        Uri.parse('$baseUrl/reservations'),
+        headers: _headers(),
+        body: jsonEncode({
+          'roomId': roomId,
+          'checkIn': DateTime.now().toUtc().toIso8601String(),
+          'durationHours': durationHours,
+          'gateway': 'PAGO_MOVIL',
+        }),
+      ),
+    );
+    final data = await _decodeObj(res);
+    return CreatedReservation.fromJson(data);
+  }
+
+  Future<CreatedReservation> extendReservation({
+    required String reservationId,
+    required int extraHours,
+  }) async {
+    final res = await _authorizedSend(
+      () => http.post(
+        Uri.parse('$baseUrl/reservations/$reservationId/extend'),
+        headers: _headers(),
+        body: jsonEncode({
+          'extraHours': extraHours,
+          'gateway': 'PAGO_MOVIL',
+        }),
+      ),
     );
     final data = await _decodeObj(res);
     return CreatedReservation.fromJson(data);
@@ -169,20 +331,24 @@ class ApiClient {
     required String paymentId,
     required String gatewayRef,
   }) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/payments/$paymentId/submit-proof'),
-      headers: _headers(),
-      body: jsonEncode({
-        'gatewayRef': gatewayRef,
-      }),
+    final res = await _authorizedSend(
+      () => http.post(
+        Uri.parse('$baseUrl/payments/$paymentId/submit-proof'),
+        headers: _headers(),
+        body: jsonEncode({
+          'gatewayRef': gatewayRef,
+        }),
+      ),
     );
     return _decodeObj(res);
   }
 
   Future<QrAccessData> fetchQrAccess(String reservationId) async {
-    final res = await http.get(
-      Uri.parse('$baseUrl/access/qr/$reservationId'),
-      headers: _headers(jsonBody: false),
+    final res = await _authorizedSend(
+      () => http.get(
+        Uri.parse('$baseUrl/access/qr/$reservationId'),
+        headers: _headers(jsonBody: false),
+      ),
     );
     final data = await _decodeObj(res);
     return QrAccessData.fromJson(data);
@@ -201,12 +367,14 @@ class ApiClient {
   }
 
   Future<void> checkoutReservation(String reservationId) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/access/checkout'),
-      headers: _headers(),
-      body: jsonEncode({
-        'reservationId': reservationId,
-      }),
+    final res = await _authorizedSend(
+      () => http.post(
+        Uri.parse('$baseUrl/access/checkout'),
+        headers: _headers(),
+        body: jsonEncode({
+          'reservationId': reservationId,
+        }),
+      ),
     );
     await _decodeObj(res);
   }

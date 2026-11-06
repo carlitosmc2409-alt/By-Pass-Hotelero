@@ -5,6 +5,7 @@ import android.content.Context
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -14,11 +15,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class BdvNotificationListenerService : NotificationListenerService() {
 
     companion object {
         const val PREFS_NAME = "staypass_bdv_bridge"
+        private const val QUEUE_KEY = "pending_queue_json"
+        private const val MAX_QUEUE_SIZE = 100
         private const val TAG = "StayPassBdvBridge"
 
         private val BDV_PACKAGES = setOf(
@@ -28,9 +32,191 @@ class BdvNotificationListenerService : NotificationListenerService() {
         )
 
         private val recentHashes = LinkedHashSet<String>()
+        private val queueLock = Any()
+
+        fun getPendingQueueCount(context: Context): Int {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val raw = prefs.getString(QUEUE_KEY, "[]") ?: "[]"
+            return runCatching { JSONArray(raw).length() }.getOrDefault(0)
+        }
+
+        fun flushPendingQueue(context: Context) {
+            synchronized(queueLock) {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val apiBaseUrl = prefs.getString("apiBaseUrl", null)?.trim()?.trimEnd('/') ?: ""
+                val hotelId = prefs.getString("hotelId", null)?.trim() ?: ""
+                val bridgeToken = prefs.getString("bridgeToken", null)?.trim() ?: ""
+
+                if (apiBaseUrl.isEmpty() || hotelId.isEmpty() || bridgeToken.isEmpty()) return
+
+                val rawQueue = prefs.getString(QUEUE_KEY, "[]") ?: "[]"
+                val currentArray = runCatching { JSONArray(rawQueue) }.getOrNull() ?: return
+                if (currentArray.length() == 0) return
+
+                val remaining = JSONArray()
+                for (i in 0 until currentArray.length()) {
+                    val item = currentArray.optJSONObject(i) ?: continue
+                    val text = item.optString("rawText", "")
+                    if (text.isEmpty()) continue
+
+                    val delivered = sendHttpEvent(
+                        context = context,
+                        apiBaseUrl = apiBaseUrl,
+                        hotelId = hotelId,
+                        bridgeToken = bridgeToken,
+                        rawText = text
+                    )
+                    if (!delivered) {
+                        // Si la red sigue caída, conservar este y el resto en orden FIFO
+                        for (j in i until currentArray.length()) {
+                            currentArray.optJSONObject(j)?.let { remaining.put(it) }
+                        }
+                        break
+                    }
+                }
+
+                prefs.edit().putString(QUEUE_KEY, remaining.toString()).apply()
+            }
+        }
+
+        private fun enqueueFailedEvent(context: Context, rawText: String) {
+            synchronized(queueLock) {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val rawQueue = prefs.getString(QUEUE_KEY, "[]") ?: "[]"
+                val arr = runCatching { JSONArray(rawQueue) }.getOrDefault(JSONArray())
+
+                // Evitar duplicar el mismo texto en la cola offline
+                for (i in 0 until arr.length()) {
+                    if (arr.optJSONObject(i)?.optString("rawText") == rawText) {
+                        return
+                    }
+                }
+
+                val trimmed = JSONArray()
+                val startIdx = if (arr.length() >= MAX_QUEUE_SIZE) arr.length() - MAX_QUEUE_SIZE + 1 else 0
+                for (i in startIdx until arr.length()) {
+                    arr.optJSONObject(i)?.let { trimmed.put(it) }
+                }
+
+                trimmed.put(
+                    JSONObject().apply {
+                        put("rawText", rawText)
+                        put("queuedAt", System.currentTimeMillis())
+                    }
+                )
+                prefs.edit().putString(QUEUE_KEY, trimmed.toString()).apply()
+            }
+        }
+
+        /**
+         * Envía el evento al backend. Retorna `true` si el servidor respondió definitivamente
+         * (2xx o 4xx no recuperable), o `false` si hubo caída de red / timeout / HTTP 5xx
+         * para que se reintente desde la cola offline.
+         */
+        fun sendHttpEvent(
+            context: Context,
+            apiBaseUrl: String,
+            hotelId: String,
+            bridgeToken: String,
+            rawText: String
+        ): Boolean {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val nowStamp = SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault()).format(Date())
+
+            var conn: HttpURLConnection? = null
+            return try {
+                val endpoint = URL("$apiBaseUrl/payments/webhook/bdv-notification")
+                conn = (endpoint.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 8000
+                    readTimeout = 12000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("x-hotel-bridge-token", bridgeToken)
+                }
+
+                val payload = JSONObject().apply {
+                    put("hotelId", hotelId)
+                    put("rawText", rawText)
+                    put("source", "BDV_NOTIFICATION")
+                }
+
+                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+                    writer.write(payload.toString())
+                    writer.flush()
+                }
+
+                val status = conn.responseCode
+                val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+                val responseBody = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+
+                if (status in 200..299) {
+                    val json = runCatching { JSONObject(responseBody) }.getOrNull()
+                    val ref = json?.optString("reference", "") ?: ""
+                    val amount = json?.optDouble("amountVes", 0.0) ?: 0.0
+                    val matched = json?.optJSONObject("reconciliation")?.optBoolean("matched", false) ?: false
+                    val zeroClick = json?.optJSONObject("reconciliation")?.optBoolean("zeroClick", false) ?: false
+                    val summary = when {
+                        matched && zeroClick -> "Cero-Clics Bs. $amount (Ref $ref)"
+                        matched -> "Conciliado Bs. $amount (Ref $ref)"
+                        else -> "Registrado Bs. $amount (Ref $ref)"
+                    }
+
+                    val newCount = prefs.getInt("forwardedCount", 0) + 1
+                    prefs.edit()
+                        .putInt("forwardedCount", newCount)
+                        .putString("lastEventSummary", summary)
+                        .putString("lastForwardedAt", nowStamp)
+                        .putString("lastError", "")
+                        .apply()
+                    true
+                } else if (status >= 500 || status == 429) {
+                    prefs.edit()
+                        .putString("lastError", "Servidor ocupado HTTP $status · En cola offline ($nowStamp)")
+                        .apply()
+                    false
+                } else {
+                    Log.w(TAG, "Webhook devolvio HTTP $status: $responseBody")
+                    prefs.edit()
+                        .putString("lastError", "HTTP $status al enviar push BDV ($nowStamp)")
+                        .apply()
+                    true
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Sin red al enviar push BDV, encolando offline", e)
+                prefs.edit()
+                    .putString("lastError", "Sin conexión (${e.javaClass.simpleName}) · Guardado en cola offline ($nowStamp)")
+                    .apply()
+                false
+            } finally {
+                conn?.disconnect()
+            }
+        }
     }
 
-    private val executor = Executors.newSingleThreadExecutor()
+    private val scheduler = Executors.newSingleThreadScheduledExecutor()
+
+    override fun onCreate() {
+        super.onCreate()
+        // Reintento automático cada 20 segundos si existen notificaciones en cola offline
+        scheduler.scheduleWithFixedDelay(
+            {
+                runCatching {
+                    if (getPendingQueueCount(applicationContext) > 0) {
+                        flushPendingQueue(applicationContext)
+                    }
+                }
+            },
+            15,
+            20,
+            TimeUnit.SECONDS
+        )
+    }
+
+    override fun onDestroy() {
+        scheduler.shutdownNow()
+        super.onDestroy()
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
@@ -88,13 +274,18 @@ class BdvNotificationListenerService : NotificationListenerService() {
             }
         }
 
-        executor.execute {
-            forwardToBackend(
+        scheduler.execute {
+            flushPendingQueue(applicationContext)
+            val ok = sendHttpEvent(
+                context = applicationContext,
                 apiBaseUrl = apiBaseUrl,
                 hotelId = hotelId,
                 bridgeToken = bridgeToken,
                 rawText = combinedText
             )
+            if (!ok) {
+                enqueueFailedEvent(applicationContext, combinedText)
+            }
         }
     }
 
@@ -121,76 +312,6 @@ class BdvNotificationListenerService : NotificationListenerService() {
             lower.contains("operación")
 
         return hasBdvBrand && hasAmountCue && hasRefCue
-    }
-
-    private fun forwardToBackend(
-        apiBaseUrl: String,
-        hotelId: String,
-        bridgeToken: String,
-        rawText: String
-    ) {
-        val prefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val nowStamp = SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault()).format(Date())
-
-        var conn: HttpURLConnection? = null
-        try {
-            val endpoint = URL("$apiBaseUrl/payments/webhook/bdv-notification")
-            conn = (endpoint.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 8000
-                readTimeout = 12000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                setRequestProperty("x-hotel-bridge-token", bridgeToken)
-            }
-
-            val payload = JSONObject().apply {
-                put("hotelId", hotelId)
-                put("rawText", rawText)
-                put("source", "BDV_NOTIFICATION")
-            }
-
-            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(payload.toString())
-                writer.flush()
-            }
-
-            val status = conn.responseCode
-            val stream = if (status in 200..299) conn.inputStream else conn.errorStream
-            val responseBody = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-
-            if (status in 200..299) {
-                val json = runCatching { JSONObject(responseBody) }.getOrNull()
-                val ref = json?.optString("reference", "") ?: ""
-                val amount = json?.optDouble("amountVes", 0.0) ?: 0.0
-                val matched = json?.optJSONObject("reconciliation")?.optBoolean("matched", false) ?: false
-                val summary = if (matched) {
-                    "Conciliado Bs. $amount (Ref $ref)"
-                } else {
-                    "Registrado Bs. $amount (Ref $ref)"
-                }
-
-                val newCount = prefs.getInt("forwardedCount", 0) + 1
-                prefs.edit()
-                    .putInt("forwardedCount", newCount)
-                    .putString("lastEventSummary", summary)
-                    .putString("lastForwardedAt", nowStamp)
-                    .putString("lastError", "")
-                    .apply()
-            } else {
-                Log.w(TAG, "Webhook devolvio HTTP $status: $responseBody")
-                prefs.edit()
-                    .putString("lastError", "HTTP $status al enviar push BDV ($nowStamp)")
-                    .apply()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error reenviando notificacion BDV", e)
-            prefs.edit()
-                .putString("lastError", "${e.javaClass.simpleName}: ${e.message} ($nowStamp)")
-                .apply()
-        } finally {
-            conn?.disconnect()
-        }
     }
 
     private fun sha256(input: String): String {

@@ -4,6 +4,8 @@ const { decryptField } = require('../../utils/fieldCrypto')
 const { round2 } = require('../../utils/rates')
 const { extractBdvNotificationWithAI } = require('./bdvAiExtractor')
 
+const EXTENSION_PREFIX = 'EXTENSION_OF:'
+
 function normalizeRef(ref) {
   return String(ref || '').replace(/\D/g, '')
 }
@@ -30,13 +32,11 @@ function normalizeVePhone(raw) {
 /**
  * Extrae monto, referencia y teléfono emisor del texto de una notificación
  * de Pago Móvil del Banco de Venezuela (BDV).
- * Ejemplo: "PagomovilBDV recibido por Bs. 1.500,00 del 04129876543 Ref: 00987654"
  */
 function parseBdvNotificationText(rawText) {
   if (!rawText || typeof rawText !== 'string') return {}
 
   // Separar cualquier segmento "Concepto:" o "Motivo:" escrito por el pagador
-  // para que un texto malicioso en el concepto nunca contamine los regex de monto/referencia
   let headerText = rawText
   let concept = null
   const conceptMatch = rawText.match(/\b(?:Concepto|Motivo)\s*[:.-]\s*(.+)$/i)
@@ -50,7 +50,6 @@ function parseBdvNotificationText(rawText) {
   const amountMatch = headerText.match(/Bs\.?\s*([0-9.,]+)/i)
   if (amountMatch) {
     const rawNum = amountMatch[1].trim()
-    // Si tiene coma decimal estilo venezolano (1.500,00)
     const normalized = rawNum.includes(',')
       ? rawNum.replace(/\./g, '').replace(',', '.')
       : rawNum.replace(/,/g, '')
@@ -75,11 +74,6 @@ function parseBdvNotificationText(rawText) {
   return { amountVes, reference, payerPhone, concept }
 }
 
-/**
- * Compara si la referencia reportada por el huésped coincide con la del banco.
- * Acepta coincidencia exacta o de los últimos 6 dígitos (muchos bancos muestran
- * solo los últimos 6 dígitos en la notificación push).
- */
 function referencesMatch(guestRef, bankRef) {
   const a = normalizeRef(guestRef)
   const b = normalizeRef(bankRef)
@@ -89,10 +83,6 @@ function referencesMatch(guestRef, bankRef) {
   return false
 }
 
-/**
- * Verifica que los datos del emisor en el evento bancario coincidan con los
- * datos de pago frecuente registrados por el huésped (cuando el evento los incluye).
- */
 function verifyPayerMatchesGuest(bankEvent, guest) {
   if (bankEvent.payerPhone && guest.paymentPhone) {
     const guestPhone = decryptField(guest.paymentPhone)
@@ -115,9 +105,77 @@ function verifyPayerMatchesGuest(bankEvent, guest) {
 }
 
 /**
+ * Ejecuta dentro de una transacción Prisma los efectos de un pago aprobado:
+ * - Si es una reserva normal: activa la reserva y marca la habitación OCCUPIED.
+ * - Si es una extensión (`EXTENSION_OF:<parentId>`): amplía `checkOut`, `durationHours`
+ *   y `totalAmount` de la estadía madre, extiende el `validUntil` de su llave QR y
+ *   cierra el registro auxiliar de extensión como COMPLETED.
+ */
+async function activateApprovedPaymentInTx(tx, { payment, reservation, confirmedBy, matchingEventId = null }) {
+  await tx.payment.update({
+    where: { id: payment.id },
+    data: {
+      status: 'APPROVED',
+      confirmedAt: new Date(),
+      confirmedBy,
+    },
+  })
+
+  if (matchingEventId) {
+    await tx.bankEvent.update({
+      where: { id: matchingEventId },
+      data: { matchedPaymentId: payment.id },
+    })
+  }
+
+  const isExtension = Boolean(reservation.notes && reservation.notes.startsWith(EXTENSION_PREFIX))
+  if (isExtension) {
+    const parentId = reservation.notes.slice(EXTENSION_PREFIX.length)
+    await tx.reservation.update({
+      where: { id: parentId },
+      data: {
+        checkOut: reservation.checkOut,
+        durationHours: { increment: reservation.durationHours },
+        totalAmount: { increment: reservation.totalAmount },
+      },
+    })
+    await tx.accessToken.updateMany({
+      where: { reservationId: parentId },
+      data: {
+        validUntil: reservation.checkOut,
+        isActive: true,
+        maxUses: { increment: 6 },
+      },
+    })
+    await tx.reservation.update({
+      where: { id: reservation.id },
+      data: { status: 'COMPLETED' },
+    })
+    return {
+      targetReservationId: parentId,
+      isExtension: true,
+      newCheckOut: reservation.checkOut,
+    }
+  }
+
+  await tx.reservation.update({
+    where: { id: reservation.id },
+    data: { status: 'ACTIVE' },
+  })
+  await tx.room.update({
+    where: { id: reservation.roomId },
+    data: { status: 'OCCUPIED' },
+  })
+
+  return {
+    targetReservationId: reservation.id,
+    isExtension: false,
+    newCheckOut: reservation.checkOut,
+  }
+}
+
+/**
  * Intenta conciliar un pago específico contra los eventos bancarios recibidos.
- * En modo `simulated`, si no existe un evento previo para esa referencia y no se
- * desactivó la auto-simulación, genera el evento simulado automáticamente.
  */
 async function reconcilePayment(paymentId, options = {}) {
   const payment = await prisma.payment.findUnique({
@@ -139,7 +197,15 @@ async function reconcilePayment(paymentId, options = {}) {
   }
 
   if (payment.status === 'APPROVED') {
-    return { matched: true, status: 'APPROVED', alreadyApproved: true }
+    const targetId = payment.reservation.notes?.startsWith(EXTENSION_PREFIX)
+      ? payment.reservation.notes.slice(EXTENSION_PREFIX.length)
+      : payment.reservationId
+    return {
+      matched: true,
+      status: 'APPROVED',
+      alreadyApproved: true,
+      reservationId: targetId,
+    }
   }
 
   const hotelId = payment.reservation.room.hotelId
@@ -150,13 +216,11 @@ async function reconcilePayment(paymentId, options = {}) {
     return { matched: false, reason: 'MISSING_REFERENCE' }
   }
 
-  // Verificar expiración de la ventana de tasa bloqueada
   if (payment.expiresAt && new Date() > new Date(payment.expiresAt)) {
     return { matched: false, reason: 'PAYMENT_WINDOW_EXPIRED' }
   }
 
-  // Buscar eventos no emparejados de este hotel
-  let candidates = await prisma.bankEvent.findMany({
+  const candidates = await prisma.bankEvent.findMany({
     where: {
       hotelId,
       matchedPaymentId: null,
@@ -167,8 +231,6 @@ async function reconcilePayment(paymentId, options = {}) {
 
   let matchingEvent = candidates.find(ev => referencesMatch(ref, ev.reference))
 
-  // En modo simulado, si no hay ningún evento previo para esta referencia y no se
-  // pidió omitir la auto-creación, simulamos la recepción inmediata desde BDV.
   if (!matchingEvent && env.PAYMENT_MODE === 'simulated' && !options.skipAutoSimulate) {
     const guestPhone = guest.paymentPhone ? decryptField(guest.paymentPhone) : guest.phone
     const guestCedula = guest.paymentCedula ? decryptField(guest.paymentCedula) : guest.cedula
@@ -190,7 +252,6 @@ async function reconcilePayment(paymentId, options = {}) {
     return { matched: false, reason: 'BANK_EVENT_NOT_FOUND' }
   }
 
-  // Validar monto exacto en Bolívares
   const expectedVes = round2(Number(payment.amountVes || payment.amount))
   const receivedVes = round2(Number(matchingEvent.amountVes))
   if (expectedVes !== receivedVes) {
@@ -202,7 +263,6 @@ async function reconcilePayment(paymentId, options = {}) {
     }
   }
 
-  // Validar identidad del emisor contra los datos de pago frecuente del huésped
   const payerCheck = verifyPayerMatchesGuest(matchingEvent, guest)
   if (!payerCheck.ok) {
     return {
@@ -212,42 +272,30 @@ async function reconcilePayment(paymentId, options = {}) {
     }
   }
 
-  // Todo coincide → aprobar pago y activar reserva de forma atómica
-  await prisma.$transaction([
-    prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        status: 'APPROVED',
-        confirmedAt: new Date(),
-        confirmedBy: `system:bank-event:${matchingEvent.id}`,
-      },
-    }),
-    prisma.reservation.update({
-      where: { id: payment.reservationId },
-      data: { status: 'ACTIVE' },
-    }),
-    prisma.room.update({
-      where: { id: payment.reservation.roomId },
-      data: { status: 'OCCUPIED' },
-    }),
-    prisma.bankEvent.update({
-      where: { id: matchingEvent.id },
-      data: { matchedPaymentId: payment.id },
-    }),
-  ])
+  const activation = await prisma.$transaction(async (tx) =>
+    activateApprovedPaymentInTx(tx, {
+      payment,
+      reservation: payment.reservation,
+      confirmedBy: `system:bank-event:${matchingEvent.id}`,
+      matchingEventId: matchingEvent.id,
+    })
+  )
 
   return {
     matched: true,
     status: 'APPROVED',
     bankEventId: matchingEvent.id,
-    reservationId: payment.reservationId,
+    reservationId: activation.targetReservationId,
+    isExtension: activation.isExtension,
+    newCheckOut: activation.newCheckOut,
   }
 }
 
 /**
- * Registra un evento bancario entrante (desde el simulador o desde el agente
- * lector de notificaciones del Banco de Venezuela) e intenta conciliarlo
- * inmediatamente si el huésped ya había reportado la referencia.
+ * Registra un evento bancario entrante e intenta conciliarlo al instante:
+ * 1) Por coincidencia de referencia si el huésped ya la reportó.
+ * 2) En modo "Cero Clics" (sin que el huésped toque el teclado) si el monto en Bs
+ *    coincide al céntimo exacto y el teléfono/cédula del push coincide con su perfil cifrado.
  */
 async function recordBankEvent(input) {
   const parsed = input.rawText ? parseBdvNotificationText(input.rawText) : {}
@@ -259,8 +307,6 @@ async function recordBankEvent(input) {
   let concept = input.concept || parsed.concept || null
   let usedAiFallback = false
 
-  // Paso B: Si el texto crudo de la notificación cambió de formato y el Regex no
-  // logró extraer la referencia o el monto, activamos el Agente IA (Gemini Structured Outputs)
   if (input.rawText && (!reference || reference.length < 4 || !amountVes || amountVes <= 0)) {
     const aiExtracted = await extractBdvNotificationWithAI(input.rawText)
     if (aiExtracted.usedAiFallback) {
@@ -308,8 +354,8 @@ async function recordBankEvent(input) {
     },
   })
 
-  // Buscar si algún pago pendiente de revisión en ese hotel ya reportó esta referencia
-  const pendingPayments = await prisma.payment.findMany({
+  // 1) Buscar si algún pago pendiente ya reportó esta referencia
+  const pendingWithRef = await prisma.payment.findMany({
     where: {
       status: { in: ['PENDING', 'PENDING_REVIEW'] },
       gatewayRef: { not: null },
@@ -319,10 +365,69 @@ async function recordBankEvent(input) {
     take: 25,
   })
 
-  const candidatePayment = pendingPayments.find(p => referencesMatch(p.gatewayRef, reference))
+  let candidatePayment = pendingWithRef.find(p => referencesMatch(p.gatewayRef, reference))
+  let zeroClick = false
+
+  // 2) Conciliación "Cero Clics": el huésped aún no escribió la referencia, pero el push
+  //    del banco trae monto exacto al céntimo + teléfono/cédula verificado de su perfil.
+  if (!candidatePayment && (payerPhone || payerCedula)) {
+    const refAlreadyUsed = await prisma.payment.findFirst({
+      where: {
+        gateway: 'PAGO_MOVIL',
+        gatewayRef: reference,
+      },
+      select: { id: true },
+    })
+
+    if (!refAlreadyUsed) {
+      const openUnreported = await prisma.payment.findMany({
+        where: {
+          status: 'PENDING',
+          gatewayRef: null,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+          reservation: { room: { hotelId: input.hotelId } },
+        },
+        include: {
+          reservation: { include: { guest: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 25,
+      })
+
+      const exactMatches = openUnreported.filter(p => {
+        const expectedVes = round2(Number(p.amountVes || p.amount))
+        if (expectedVes !== round2(Number(amountVes))) return false
+        const guest = p.reservation.guest
+        const hasVerifiedIdentity =
+          Boolean(payerPhone && guest.paymentPhone) ||
+          Boolean(payerCedula && guest.paymentCedula)
+        if (!hasVerifiedIdentity) return false
+        return verifyPayerMatchesGuest(bankEvent, guest).ok
+      })
+
+      if (exactMatches.length === 1) {
+        const chosen = exactMatches[0]
+        await prisma.payment.update({
+          where: { id: chosen.id },
+          data: {
+            gatewayRef: reference,
+            reportedAt: new Date(),
+            status: 'PENDING_REVIEW',
+            metadata: { autoReportedByZeroClick: true, bankEventId: bankEvent.id },
+          },
+        })
+        candidatePayment = chosen
+        zeroClick = true
+      }
+    }
+  }
+
   let reconciliation = null
   if (candidatePayment) {
     reconciliation = await reconcilePayment(candidatePayment.id, { skipAutoSimulate: true })
+    if (reconciliation && zeroClick) {
+      reconciliation.zeroClick = true
+    }
   }
 
   return { bankEvent, reconciliation, usedAiFallback }
@@ -331,6 +436,7 @@ async function recordBankEvent(input) {
 module.exports = {
   normalizeRef,
   parseBdvNotificationText,
+  activateApprovedPaymentInTx,
   reconcilePayment,
   recordBankEvent,
 }

@@ -11,6 +11,11 @@ async function reservationsRoutes(fastify) {
     preHandler: [fastify.authenticate, fastify.authorizeGuest],
   }, ctrl.handleListGuest)
 
+  // Huésped: extender estadía activa (+1h .. +24h)
+  fastify.post('/:id/extend', {
+    preHandler: [fastify.authenticate, fastify.authorizeGuest],
+  }, ctrl.handleExtend)
+
   // Huésped o propietario: detalle de reserva
   fastify.get('/:id', {
     preHandler: [fastify.authenticate],

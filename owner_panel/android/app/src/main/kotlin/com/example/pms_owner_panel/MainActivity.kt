@@ -9,12 +9,15 @@ import android.service.notification.NotificationListenerService
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "com.staypass.owner/bdv_bridge"
     }
+
+    private val bgExecutor = Executors.newSingleThreadExecutor()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -55,7 +58,21 @@ class MainActivity : FlutterActivity() {
                             }
                         }
 
+                        if (enabled) {
+                            bgExecutor.execute {
+                                BdvNotificationListenerService.flushPendingQueue(applicationContext)
+                            }
+                        }
+
                         result.success(readBridgeStatus())
+                    }
+                    "flushQueue" -> {
+                        bgExecutor.execute {
+                            BdvNotificationListenerService.flushPendingQueue(applicationContext)
+                            runOnUiThread {
+                                result.success(readBridgeStatus())
+                            }
+                        }
                     }
                     "openNotificationSettings" -> {
                         val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
@@ -98,6 +115,7 @@ class MainActivity : FlutterActivity() {
             "hotelId" to (prefs.getString("hotelId", "") ?: ""),
             "allowTestSources" to prefs.getBoolean("allowTestSources", true),
             "forwardedCount" to prefs.getInt("forwardedCount", 0),
+            "pendingQueueCount" to BdvNotificationListenerService.getPendingQueueCount(applicationContext),
             "lastEventSummary" to (prefs.getString("lastEventSummary", "") ?: ""),
             "lastForwardedAt" to (prefs.getString("lastForwardedAt", "") ?: ""),
             "lastError" to (prefs.getString("lastError", "") ?: "")

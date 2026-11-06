@@ -1,5 +1,6 @@
 const { prisma } = require('../../config/database')
 const { generateHotelBridgeToken } = require('../../utils/crypto')
+const { getRate } = require('../../utils/rates')
 const { z } = require('zod')
 
 const paymentInfoSchema = z.object({
@@ -8,6 +9,7 @@ const paymentInfoSchema = z.object({
   phone: z.string().min(10).max(20),
   idNumber: z.string().min(5).max(25),
   holderName: z.string().min(2).max(120).optional(),
+  fallbackExchangeRate: z.number().positive().optional(),
 }).optional()
 
 const createHotelSchema = z.object({
@@ -56,6 +58,22 @@ async function handleListPublic(request, reply) {
         longitude: true,
         coverPhoto: true,
         description: true,
+        rooms: {
+          where: { status: { in: ['AVAILABLE', 'OCCUPIED'] } },
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            pricePerHour: true,
+            pricePerNight: true,
+            currency: true,
+            amenities: true,
+            photos: true,
+            status: true,
+            maxGuests: true,
+          },
+          orderBy: { sortOrder: 'asc' },
+        },
         _count: { select: { rooms: true } },
       },
       skip,
@@ -235,6 +253,10 @@ async function handleOwnerDashboard(request, reply) {
     }
   })
 
+  const currentExchangeRate = await getRate({
+    fallbackRate: hotel.paymentInfo?.fallbackExchangeRate,
+  }).catch(() => null)
+
   return reply.send({
     hotel: {
       id: hotel.id,
@@ -244,6 +266,7 @@ async function handleOwnerDashboard(request, reply) {
       status: hotel.status,
       paymentInfo: hotel.paymentInfo,
       bdvBridgeToken: generateHotelBridgeToken(hotel.id),
+      currentExchangeRate,
     },
     metrics: {
       totalRooms: roomsFormatted.length,

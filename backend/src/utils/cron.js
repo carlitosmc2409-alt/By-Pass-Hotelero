@@ -8,8 +8,19 @@ const dayjs = require('dayjs')
 function startCronJobs() {
   console.log('⏰ Iniciando jobs programados...')
 
-  // Cada 5 minutos: expirar reservas y QRs vencidos
-  cron.schedule('*/5 * * * *', expireReservations)
+  // Cada 1 minuto: liberar reservas impagas cuya ventana de 10 min venció
+  cron.schedule('* * * * *', () => {
+    expireUnpaidReservations().catch(err =>
+      console.error('⚠️ [Cron] Error liberando reservas impagas:', err.message)
+    )
+  })
+
+  // Cada 5 minutos: expirar reservas activas cuyo check-out ya pasó y desactivar QRs
+  cron.schedule('*/5 * * * *', () => {
+    expireReservations().catch(err =>
+      console.error('⚠️ [Cron] Error expirando estadías:', err.message)
+    )
+  })
 
   // Cada hora: limpiar OTPs usados/expirados
   cron.schedule('0 * * * *', cleanExpiredOtps)
@@ -18,6 +29,44 @@ function startCronJobs() {
   cron.schedule('0 * * * *', cleanExpiredRefreshTokens)
 
   console.log('✅ Jobs programados activos')
+}
+
+/**
+ * Cancela reservas en `PENDING_PAYMENT` cuyo pago sigue `PENDING` y superó `expiresAt`
+ * (evita que reservas abandonadas bloqueen el inventario del hotel).
+ */
+async function expireUnpaidReservations() {
+  const now = new Date()
+
+  const expiredPayments = await prisma.payment.findMany({
+    where: {
+      status: 'PENDING',
+      expiresAt: { lte: now },
+      reservation: { status: 'PENDING_PAYMENT' },
+    },
+    select: { id: true, reservationId: true },
+  })
+
+  if (expiredPayments.length === 0) {
+    return { expiredCount: 0 }
+  }
+
+  const paymentIds = expiredPayments.map(p => p.id)
+  const reservationIds = expiredPayments.map(p => p.reservationId)
+
+  await prisma.$transaction([
+    prisma.payment.updateMany({
+      where: { id: { in: paymentIds } },
+      data: { status: 'FAILED' },
+    }),
+    prisma.reservation.updateMany({
+      where: { id: { in: reservationIds } },
+      data: { status: 'CANCELLED' },
+    }),
+  ])
+
+  console.log(`⏰ [Cron] ${reservationIds.length} reservas impagas liberadas por vencimiento`)
+  return { expiredCount: reservationIds.length }
 }
 
 /**
@@ -51,8 +100,7 @@ async function expireReservations() {
       where: { reservationId: { in: ids }, isActive: true },
       data: { isActive: false },
     }),
-    // Marcar habitaciones como disponibles (limpieza)
-    // (En producción podría marcar como CLEANING primero)
+    // Marcar habitaciones en limpieza tras vencer estadía
     prisma.room.updateMany({
       where: { reservations: { some: { id: { in: ids } } } },
       data: { status: 'CLEANING' },
@@ -98,4 +146,4 @@ async function cleanExpiredRefreshTokens() {
   }
 }
 
-module.exports = { startCronJobs }
+module.exports = { startCronJobs, expireUnpaidReservations, expireReservations }

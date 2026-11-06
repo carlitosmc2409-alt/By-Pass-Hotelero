@@ -50,6 +50,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
   final _payPhoneCtrl = TextEditingController();
   final _payIdCtrl = TextEditingController();
   final _payHolderCtrl = TextEditingController();
+  final _fallbackRateCtrl = TextEditingController();
   bool _savingPaymentInfo = false;
 
   @override
@@ -68,6 +69,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
     _payPhoneCtrl.dispose();
     _payIdCtrl.dispose();
     _payHolderCtrl.dispose();
+    _fallbackRateCtrl.dispose();
     super.dispose();
   }
 
@@ -142,6 +144,8 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
       _payIdCtrl.text = (paymentInfo['idNumber'] ?? '').toString();
       _payHolderCtrl.text =
           (paymentInfo['holderName'] ?? hotel['name'] ?? '').toString();
+      final fbRate = paymentInfo['fallbackExchangeRate'];
+      _fallbackRateCtrl.text = fbRate != null ? fbRate.toString() : '';
 
       setState(() {
         _dashboard = data;
@@ -371,6 +375,10 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
           .replaceAll('(Piloto Automático)', '')
           .trim();
 
+      final fallbackRate = double.tryParse(
+        _fallbackRateCtrl.text.trim().replaceAll(',', '.'),
+      );
+
       await widget.api.updateHotelPaymentInfo(
         hotelId: hotelId,
         bank: _selectedBankCode,
@@ -378,6 +386,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
         phone: phone,
         idNumber: idNumber,
         holderName: holderName.isEmpty ? 'Propietario' : holderName,
+        fallbackExchangeRate: fallbackRate,
       );
       _showSnack('Cuenta receptora Pago Móvil actualizada');
       await _refreshDashboard();
@@ -1113,6 +1122,9 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
   }
 
   Widget _buildPaymentSettingsTab() {
+    final hotel = (_dashboard?['hotel'] as Map<String, dynamic>?) ?? {};
+    final currentRate = hotel['currentExchangeRate'];
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Center(
@@ -1148,6 +1160,42 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
                       fontSize: 13,
                     ),
                   ),
+                  if (currentRate != null) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: OwnerTheme.available.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: OwnerTheme.available.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.currency_exchange_rounded,
+                            size: 18,
+                            color: OwnerTheme.available,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Tasa BCV activa en el sistema: Bs. $currentRate / USD',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: OwnerTheme.textPrimary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   InputDecorator(
                     decoration: const InputDecoration(
@@ -1198,6 +1246,18 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
                     decoration: const InputDecoration(
                       labelText: 'Nombre o Razón Social del Titular',
                       prefixIcon: Icon(Icons.business_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _fallbackRateCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Tasa Bs/USD de Respaldo (opcional si BCV falla)',
+                      helperText:
+                          'Se usa únicamente si la consulta automática BCV no responde.',
+                      prefixIcon: Icon(Icons.currency_exchange_rounded),
                     ),
                   ),
                   const SizedBox(height: 22),
@@ -1272,9 +1332,12 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
       );
       final rec = res['reconciliation'] as Map<String, dynamic>?;
       final matched = rec?['matched'] == true;
+      final zeroClick = rec?['zeroClick'] == true;
       _showSnack(
         matched
-            ? 'Push BDV conciliado al instante: Reserva aprobada y llave QR activa.'
+            ? (zeroClick
+                ? '¡Conciliación Zero-Click! Reserva aprobada sin pedir referencia y llave QR activa.'
+                : 'Push BDV conciliado al instante: Reserva aprobada y llave QR activa.')
             : 'Push BDV registrado (Bs. ${res['amountVes']} · Ref ${res['reference']}). Esperando reporte o reserva.',
       );
       await _refreshDashboard();
@@ -1433,13 +1496,31 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
                         ),
                         const SizedBox(height: 14),
                         Text(
-                          'Notificaciones reenviadas: ${_bridgeStatus.forwardedCount}'
+                          'Notificaciones reenviadas: ${_bridgeStatus.forwardedCount} · En cola offline: ${_bridgeStatus.pendingQueueCount}'
                           '${_bridgeStatus.lastEventSummary.isNotEmpty ? ' · Última: ${_bridgeStatus.lastEventSummary} (${_bridgeStatus.lastForwardedAt})' : ''}',
                           style: const TextStyle(
                             fontSize: 12,
                             color: OwnerTheme.textSecondary,
                           ),
                         ),
+                        if (_bridgeStatus.pendingQueueCount > 0) ...[
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final st = await _bridgeService.flushQueue();
+                                if (!mounted) return;
+                                setState(() => _bridgeStatus = st);
+                                _showSnack('Reintento de cola offline disparado.');
+                              },
+                              icon: const Icon(Icons.sync_rounded, size: 16),
+                              label: Text(
+                                'Reintentar Cola Ahora (${_bridgeStatus.pendingQueueCount})',
+                              ),
+                            ),
+                          ),
+                        ],
                         if (_bridgeStatus.lastError.isNotEmpty) ...[
                           const SizedBox(height: 4),
                           Text(

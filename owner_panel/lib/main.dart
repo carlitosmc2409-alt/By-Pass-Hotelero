@@ -5,6 +5,7 @@ import 'screens/owner_dashboard_screen.dart';
 import 'screens/owner_login_screen.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const OwnerPanelApp());
 }
 
@@ -20,6 +21,19 @@ class _OwnerPanelAppState extends State<OwnerPanelApp> {
   bool _authenticated = false;
 
   @override
+  void initState() {
+    super.initState();
+    _restoreSavedSession();
+  }
+
+  Future<void> _restoreSavedSession() async {
+    final ok = await _api.restoreSession();
+    if (ok && mounted) {
+      setState(() => _authenticated = true);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'StayPass · Panel del Propietario',
@@ -28,9 +42,11 @@ class _OwnerPanelAppState extends State<OwnerPanelApp> {
       home: _authenticated
           ? OwnerDashboardScreen(
               api: _api,
-              onLogout: () {
-                _api.setAccessToken(null);
-                setState(() => _authenticated = false);
+              onLogout: () async {
+                await _api.logout();
+                if (mounted) {
+                  setState(() => _authenticated = false);
+                }
               },
             )
           : OwnerLoginScreen(

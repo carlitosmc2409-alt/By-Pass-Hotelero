@@ -5,6 +5,7 @@ import 'screens/auth_screen.dart';
 import 'screens/hotels_screen.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const StayPassApp());
 }
 
@@ -20,6 +21,19 @@ class _StayPassAppState extends State<StayPassApp> {
   bool _authenticated = false;
 
   @override
+  void initState() {
+    super.initState();
+    _restoreSavedSession();
+  }
+
+  Future<void> _restoreSavedSession() async {
+    final ok = await _api.restoreSession();
+    if (ok && mounted) {
+      setState(() => _authenticated = true);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'StayPass QR',
@@ -28,9 +42,11 @@ class _StayPassAppState extends State<StayPassApp> {
       home: _authenticated
           ? HotelsScreen(
               api: _api,
-              onLogout: () {
-                _api.setAccessToken(null);
-                setState(() => _authenticated = false);
+              onLogout: () async {
+                await _api.logout();
+                if (mounted) {
+                  setState(() => _authenticated = false);
+                }
               },
             )
           : AuthScreen(

@@ -9,6 +9,7 @@ class BdvBridgeStatus {
   final String hotelId;
   final bool allowTestSources;
   final int forwardedCount;
+  final int pendingQueueCount;
   final String lastEventSummary;
   final String lastForwardedAt;
   final String lastError;
@@ -21,6 +22,7 @@ class BdvBridgeStatus {
     required this.hotelId,
     required this.allowTestSources,
     required this.forwardedCount,
+    required this.pendingQueueCount,
     required this.lastEventSummary,
     required this.lastForwardedAt,
     required this.lastError,
@@ -35,6 +37,7 @@ class BdvBridgeStatus {
       hotelId: '',
       allowTestSources: true,
       forwardedCount: 0,
+      pendingQueueCount: 0,
       lastEventSummary: '',
       lastForwardedAt: '',
       lastError: '',
@@ -50,6 +53,7 @@ class BdvBridgeStatus {
       hotelId: (map['hotelId'] ?? '').toString(),
       allowTestSources: map['allowTestSources'] != false,
       forwardedCount: (map['forwardedCount'] as num?)?.toInt() ?? 0,
+      pendingQueueCount: (map['pendingQueueCount'] as num?)?.toInt() ?? 0,
       lastEventSummary: (map['lastEventSummary'] ?? '').toString(),
       lastForwardedAt: (map['lastForwardedAt'] ?? '').toString(),
       lastError: (map['lastError'] ?? '').toString(),
@@ -97,6 +101,15 @@ class BdvBridgeService {
         'allowTestSources': allowTestSources,
       },
     );
+    if (raw == null) return BdvBridgeStatus.unsupported();
+    return BdvBridgeStatus.fromMap(raw);
+  }
+
+  Future<BdvBridgeStatus> flushQueue() async {
+    if (!isAndroidNative) {
+      return BdvBridgeStatus.unsupported();
+    }
+    final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>('flushQueue');
     if (raw == null) return BdvBridgeStatus.unsupported();
     return BdvBridgeStatus.fromMap(raw);
   }

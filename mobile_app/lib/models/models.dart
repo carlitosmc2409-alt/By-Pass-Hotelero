@@ -90,14 +90,14 @@ class RoomModel {
     return RoomModel(
       id: json['id'] as String,
       name: json['name'] as String,
-      type: json['type'] as String,
+      type: (json['type'] as String?) ?? 'STANDARD',
       pricePerHour: double.parse(json['pricePerHour'].toString()),
       pricePerNight: double.parse(json['pricePerNight'].toString()),
       currency: (json['currency'] as String?) ?? 'USD',
       amenities: (json['amenities'] as List<dynamic>? ?? [])
           .map((e) => e.toString())
           .toList(),
-      status: json['status'] as String,
+      status: (json['status'] as String?) ?? 'AVAILABLE',
     );
   }
 }
@@ -124,8 +124,8 @@ class HotelModel {
     return HotelModel(
       id: json['id'] as String,
       name: json['name'] as String,
-      address: json['address'] as String,
-      city: json['city'] as String,
+      address: (json['address'] as String?) ?? '',
+      city: (json['city'] as String?) ?? '',
       description: json['description'] as String?,
       rooms: roomsJson
           .map((r) => RoomModel.fromJson(r as Map<String, dynamic>))
@@ -136,6 +136,8 @@ class HotelModel {
 
 class CreatedReservation {
   final String reservationId;
+  final String? parentReservationId;
+  final bool isExtension;
   final String paymentId;
   final double totalAmount;
   final String currency;
@@ -148,6 +150,8 @@ class CreatedReservation {
 
   const CreatedReservation({
     required this.reservationId,
+    this.parentReservationId,
+    this.isExtension = false,
     required this.paymentId,
     required this.totalAmount,
     required this.currency,
@@ -159,9 +163,16 @@ class CreatedReservation {
     required this.checkOut,
   });
 
+  String get effectiveQrReservationId =>
+      isExtension && parentReservationId != null
+          ? parentReservationId!
+          : reservationId;
+
   factory CreatedReservation.fromJson(Map<String, dynamic> json) {
     return CreatedReservation(
       reservationId: json['reservationId'] as String,
+      parentReservationId: json['parentReservationId'] as String?,
+      isExtension: json['isExtension'] == true,
       paymentId: json['paymentId'] as String,
       totalAmount: double.parse(json['totalAmount'].toString()),
       currency: (json['currency'] as String?) ?? 'USD',
@@ -172,6 +183,100 @@ class CreatedReservation {
           (json['receptorPagoMovil'] as Map<String, dynamic>?) ?? const {},
       checkIn: DateTime.parse(json['checkIn'] as String),
       checkOut: DateTime.parse(json['checkOut'] as String),
+    );
+  }
+}
+
+class GuestReservationSummary {
+  final String id;
+  final String status;
+  final int durationHours;
+  final double totalAmount;
+  final String currency;
+  final DateTime checkIn;
+  final DateTime checkOut;
+  final bool isExtension;
+  final String? parentReservationId;
+  final RoomModel room;
+  final HotelModel hotel;
+  final Map<String, dynamic>? payment;
+  final Map<String, dynamic> hotelPaymentInfo;
+
+  const GuestReservationSummary({
+    required this.id,
+    required this.status,
+    required this.durationHours,
+    required this.totalAmount,
+    required this.currency,
+    required this.checkIn,
+    required this.checkOut,
+    required this.isExtension,
+    this.parentReservationId,
+    required this.room,
+    required this.hotel,
+    this.payment,
+    required this.hotelPaymentInfo,
+  });
+
+  bool get isActive => status == 'ACTIVE';
+  bool get isAwaitingPayment =>
+      status == 'PENDING_PAYMENT' || status == 'PAYMENT_PENDING_REVIEW';
+
+  CreatedReservation? toResumableReservation() {
+    final pay = payment;
+    if (pay == null || pay['id'] == null) return null;
+    final expStr = pay['expiresAt']?.toString();
+    final expiresAt = expStr != null
+        ? DateTime.parse(expStr)
+        : DateTime.now().add(const Duration(minutes: 5));
+    return CreatedReservation(
+      reservationId: id,
+      parentReservationId: parentReservationId,
+      isExtension: isExtension,
+      paymentId: pay['id'] as String,
+      totalAmount: totalAmount,
+      currency: currency,
+      amountVes: double.tryParse(pay['amountVes']?.toString() ?? '') ?? totalAmount,
+      exchangeRate: double.tryParse(pay['exchangeRate']?.toString() ?? '') ?? 50.0,
+      paymentExpiresAt: expiresAt,
+      receptorPagoMovil: hotelPaymentInfo,
+      checkIn: checkIn,
+      checkOut: checkOut,
+    );
+  }
+
+  factory GuestReservationSummary.fromJson(Map<String, dynamic> json) {
+    final roomMap = (json['room'] as Map<String, dynamic>?) ?? const {};
+    final hotelMap = (roomMap['hotel'] as Map<String, dynamic>?) ?? const {};
+    return GuestReservationSummary(
+      id: json['id'] as String,
+      status: (json['status'] as String?) ?? 'PENDING_PAYMENT',
+      durationHours: (json['durationHours'] as num?)?.toInt() ?? 1,
+      totalAmount: double.parse(json['totalAmount'].toString()),
+      currency: (json['currency'] as String?) ?? 'USD',
+      checkIn: DateTime.parse(json['checkIn'] as String),
+      checkOut: DateTime.parse(json['checkOut'] as String),
+      isExtension: json['isExtension'] == true,
+      parentReservationId: json['parentReservationId'] as String?,
+      room: RoomModel(
+        id: (roomMap['id'] as String?) ?? '',
+        name: (roomMap['name'] as String?) ?? '',
+        type: (roomMap['type'] as String?) ?? 'STANDARD',
+        pricePerHour: double.tryParse(roomMap['pricePerHour']?.toString() ?? '') ?? 10,
+        pricePerNight: double.tryParse(roomMap['pricePerNight']?.toString() ?? '') ?? 50,
+        currency: (json['currency'] as String?) ?? 'USD',
+        amenities: const [],
+        status: 'OCCUPIED',
+      ),
+      hotel: HotelModel(
+        id: (hotelMap['id'] as String?) ?? '',
+        name: (hotelMap['name'] as String?) ?? 'Motel',
+        address: (hotelMap['address'] as String?) ?? '',
+        city: (hotelMap['city'] as String?) ?? '',
+      ),
+      payment: json['payment'] as Map<String, dynamic>?,
+      hotelPaymentInfo:
+          (hotelMap['paymentInfo'] as Map<String, dynamic>?) ?? const {},
     );
   }
 }
