@@ -52,6 +52,8 @@ model Hotel {
   photos      Json        @default("[]") // array de URLs S3
   status      HotelStatus @default(ACTIVE)
   settings    Json        @default("{}") // config flexible: check-in hora, etc.
+  // Cuenta donde el hotel recibe Pago Móvil: { bank, phone, idNumber, holderName }
+  paymentInfo Json        @default("{}")
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
@@ -122,6 +124,12 @@ model Guest {
   passwordHash String
   isVerified   Boolean  @default(false) // verificado por WhatsApp OTP
   isActive     Boolean  @default(true)
+
+  // Datos de pago frecuente (Pago Móvil). Cédula y teléfono van cifrados (AES-256-GCM).
+  paymentCedula String?
+  paymentBank   String?               // código de banco de 4 dígitos (ej: 0102)
+  paymentPhone  String?
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -218,19 +226,57 @@ model Payment {
   id              String        @id @default(uuid())
   reservationId   String        @unique
   gateway         PaymentGateway
-  gatewayRef      String?               // referencia del gateway
-  amount          Decimal       @db.Decimal(10, 2)
+  gatewayRef      String?               // referencia bancaria normalizada (solo dígitos)
+  amount          Decimal       @db.Decimal(10, 2)   // monto en moneda de la habitación (USD)
   currency        String        @default("USD")
+  amountVes       Decimal?      @db.Decimal(14, 2)   // monto a pagar en bolívares (bloqueado)
+  exchangeRate    Decimal?      @db.Decimal(14, 4)   // tasa Bs/USD usada al crear la reserva
+  expiresAt       DateTime?                          // límite para pagar con ese monto en Bs
+  reportedAt      DateTime?                          // cuando el huésped reportó la referencia
   status          PaymentStatus @default(PENDING)
   metadata        Json          @default("{}") // datos extra del gateway
   confirmedAt     DateTime?
-  confirmedBy     String?               // "system" o ID del propietario
+  confirmedBy     String?               // "system:bank-event:<id>" o ID del propietario
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
   reservation     Reservation   @relation(fields: [reservationId], references: [id])
+  bankEvent       BankEvent?
 
+  // Una referencia bancaria no puede usarse en dos pagos
+  @@unique([gateway, gatewayRef])
   @@map("payments")
+}
+
+// ============================================================
+// EVENTOS BANCARIOS (pagos recibidos por el hotel)
+// Los alimenta el simulador, y más adelante el agente que lee las
+// notificaciones del banco en el teléfono del propietario.
+// ============================================================
+model BankEvent {
+  id                String          @id @default(uuid())
+  hotelId           String
+  source            BankEventSource
+  amountVes         Decimal         @db.Decimal(14, 2)
+  reference         String                  // solo dígitos
+  payerPhone        String?                 // +58XXXXXXXXXX si el banco lo informa
+  payerCedula       String?                 // solo dígitos si el banco lo informa
+  payerBank         String?                 // código de banco si el banco lo informa
+  concept           String?                 // texto libre del pagador (NO es confiable)
+  rawText           String?                 // texto original de la notificación
+  receivedAt        DateTime        @default(now())
+  matchedPaymentId  String?         @unique
+  createdAt         DateTime        @default(now())
+
+  matchedPayment    Payment?        @relation(fields: [matchedPaymentId], references: [id])
+
+  @@index([hotelId, reference])
+  @@map("bank_events")
+}
+
+enum BankEventSource {
+  SIMULATED
+  BDV_NOTIFICATION
 }
 
 enum PaymentGateway {

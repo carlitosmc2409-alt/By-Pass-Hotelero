@@ -20,6 +20,14 @@ const env = {
 
   QR_SECRET_KEY: process.env.QR_SECRET_KEY,
 
+  // Cifrado de datos de pago del huésped (AES-256-GCM, 64 caracteres hex)
+  DATA_ENCRYPTION_KEY: process.env.DATA_ENCRYPTION_KEY,
+
+  // Verificación de pagos: manual | simulated | bdv_notification
+  PAYMENT_MODE: process.env.PAYMENT_MODE || 'manual',
+  PAYMENT_HOLD_MINUTES: parseInt(process.env.PAYMENT_HOLD_MINUTES) || 10,
+  SIMULATED_BCV_RATE: parseFloat(process.env.SIMULATED_BCV_RATE) || 0,
+
   // WhatsApp
   WHATSAPP_PROVIDER: process.env.WHATSAPP_PROVIDER || 'twilio',
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
@@ -50,10 +58,20 @@ function validateEnv() {
     'JWT_SECRET',
     'JWT_REFRESH_SECRET',
     'QR_SECRET_KEY',
+    'DATA_ENCRYPTION_KEY',
   ]
   const missing = required.filter(key => !env[key])
   if (missing.length > 0) {
     throw new Error(`Variables de entorno faltantes: ${missing.join(', ')}`)
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(env.DATA_ENCRYPTION_KEY)) {
+    throw new Error('DATA_ENCRYPTION_KEY debe ser de 64 caracteres hexadecimales (32 bytes)')
+  }
+  if (!['manual', 'simulated', 'bdv_notification'].includes(env.PAYMENT_MODE)) {
+    throw new Error('PAYMENT_MODE debe ser manual, simulated o bdv_notification')
+  }
+  if (env.PAYMENT_MODE === 'simulated' && env.isProd()) {
+    throw new Error('PAYMENT_MODE=simulated no está permitido en producción')
   }
 }
 

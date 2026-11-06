@@ -1,4 +1,6 @@
 const { prisma } = require('../../config/database')
+const env = require('../../config/env')
+const { getRate, round2 } = require('../../utils/rates')
 const { z } = require('zod')
 const dayjs = require('dayjs')
 
@@ -17,7 +19,10 @@ async function handleCreate(request, reply) {
   const checkOutDate = checkInDate.add(durationHours, 'hour')
 
   // Verificar que la habitación existe y está disponible
-  const room = await prisma.room.findUnique({ where: { id: roomId } })
+  const room = await prisma.room.findUnique({
+    where: { id: roomId },
+    include: { hotel: { select: { id: true, name: true, paymentInfo: true } } },
+  })
   if (!room || room.status !== 'AVAILABLE') {
     return reply.status(409).send({ message: 'Habitación no disponible' })
   }
@@ -38,10 +43,14 @@ async function handleCreate(request, reply) {
     return reply.status(409).send({ message: 'La habitación ya está reservada en ese horario' })
   }
 
-  // Calcular precio
+  // Calcular precio en USD y bloquear monto equivalente en Bolívares
   const totalAmount = durationHours >= 24
-    ? room.pricePerNight
+    ? Number(room.pricePerNight)
     : Number(room.pricePerHour) * durationHours
+
+  const exchangeRate = await getRate()
+  const amountVes = round2(totalAmount * exchangeRate)
+  const expiresAt = dayjs().add(env.PAYMENT_HOLD_MINUTES, 'minute').toDate()
 
   // Crear reserva + pago en transacción
   const result = await prisma.$transaction(async (tx) => {
@@ -64,6 +73,9 @@ async function handleCreate(request, reply) {
         gateway,
         amount: totalAmount,
         currency: room.currency,
+        amountVes,
+        exchangeRate,
+        expiresAt,
         status: 'PENDING',
       },
     })
@@ -76,9 +88,13 @@ async function handleCreate(request, reply) {
     paymentId: result.payment.id,
     totalAmount,
     currency: room.currency,
+    amountVes,
+    exchangeRate,
+    paymentExpiresAt: expiresAt,
+    receptorPagoMovil: room.hotel.paymentInfo,
     checkIn: checkInDate.toDate(),
     checkOut: checkOutDate.toDate(),
-    message: 'Reserva creada. Procede con el pago para confirmar.',
+    message: 'Reserva creada. Realiza el Pago Móvil por el monto exacto en Bs y reporta la referencia.',
   })
 }
 

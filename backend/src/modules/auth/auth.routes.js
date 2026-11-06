@@ -19,6 +19,14 @@ async function authRoutes(fastify) {
     preHandler: [fastify.authenticate, fastify.authorizeGuest],
   }, ctrl.handleGuestProfile)
 
+  // PUT /api/v1/auth/guest/payment-profile  (requiere JWT)
+  fastify.put('/guest/payment-profile', {
+    preHandler: [fastify.authenticate, fastify.authorizeGuest],
+  }, ctrl.handleUpdatePaymentProfile)
+
+  // GET /api/v1/auth/banks  (pública: catálogo de bancos de Venezuela)
+  fastify.get('/banks', ctrl.handleListBanks)
+
   // ── Tokens ───────────────────────────────────────────────
   // POST /api/v1/auth/refresh
   fastify.post('/refresh', ctrl.handleRefreshToken)

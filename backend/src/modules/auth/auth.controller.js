@@ -1,6 +1,8 @@
 const authService = require('./auth.service')
+const { BANKS } = require('../../utils/banks')
 const {
   registerGuestSchema,
+  updatePaymentProfileSchema,
   verifyOtpSchema,
   loginGuestSchema,
   refreshTokenSchema,
@@ -60,12 +62,31 @@ async function handleGuestProfile(request, reply) {
       fullName: true,
       phone: true,
       cedula: true,
+      paymentBank: true,
+      paymentCedula: true,
+      paymentPhone: true,
       isVerified: true,
       createdAt: true,
     },
   })
   if (!guest) return reply.status(404).send({ message: 'Huésped no encontrado' })
-  return reply.send(guest)
+
+  const { paymentBank, paymentCedula, paymentPhone, ...rest } = guest
+  return reply.send({
+    ...rest,
+    paymentProfile: authService.formatGuestPaymentProfile(guest),
+  })
+}
+
+async function handleUpdatePaymentProfile(request, reply) {
+  const data = updatePaymentProfileSchema.parse(request.body)
+  const result = await authService.updateGuestPaymentProfile(request.user.id, data)
+  return reply.send(result)
+}
+
+async function handleListBanks(_request, reply) {
+  const list = Object.entries(BANKS).map(([code, name]) => ({ code, name }))
+  return reply.send(list)
 }
 
 // ── OWNER ─────────────────────────────────────────────────────
@@ -112,6 +133,8 @@ module.exports = {
   handleRefreshToken,
   handleLogout,
   handleGuestProfile,
+  handleUpdatePaymentProfile,
+  handleListBanks,
   handleRegisterOwner,
   handleLoginOwner,
   handleOwnerProfile,

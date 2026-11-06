@@ -5,16 +5,26 @@ const dayjs = require('dayjs')
 const { prisma } = require('../../config/database')
 const env = require('../../config/env')
 const { hashValue, generateOtp } = require('../../utils/crypto')
+const { encryptField, decryptField, maskTail } = require('../../utils/fieldCrypto')
+const { bankName } = require('../../utils/banks')
 const { sendWhatsAppOtp } = require('../../utils/whatsapp')
 
 // ── GUEST AUTH ────────────────────────────────────────────────
 
 /**
- * Registra un nuevo huésped.
+ * Registra un nuevo huésped junto con sus datos de pago frecuente.
  * Envía OTP por WhatsApp para verificar el teléfono.
  */
 async function registerGuest(data) {
-  const { fullName, phone, cedula, password } = data
+  const {
+    fullName,
+    phone,
+    cedula,
+    paymentBank,
+    paymentPhone,
+    paymentCedula,
+    password,
+  } = data
 
   // Verificar si el teléfono ya existe
   const phoneHash = hashValue(phone)
@@ -25,7 +35,7 @@ async function registerGuest(data) {
     throw error
   }
 
-  // Verificar cédula si se proporcionó
+  // Verificar cédula
   if (cedula) {
     const existingCedula = await prisma.guest.findUnique({ where: { cedula } })
     if (existingCedula) {
@@ -36,13 +46,18 @@ async function registerGuest(data) {
   }
 
   const passwordHash = await bcrypt.hash(password, env.BCRYPT_ROUNDS)
+  const effectivePaymentCedula = paymentCedula || cedula
+  const effectivePaymentPhone = paymentPhone || phone
 
   const guest = await prisma.guest.create({
     data: {
       fullName,
       phone,         // guardamos el teléfono en claro para enviar WhatsApp
       phoneHash,
-      cedula: cedula || null,
+      cedula,
+      paymentBank,
+      paymentCedula: encryptField(effectivePaymentCedula),
+      paymentPhone: encryptField(effectivePaymentPhone),
       passwordHash,
       isVerified: false,
     },
@@ -61,6 +76,47 @@ async function registerGuest(data) {
   return {
     message: 'Registro exitoso. Revisa tu WhatsApp para verificar tu número.',
     guestId: guest.id,
+  }
+}
+
+/**
+ * Actualiza los datos de pago frecuente del huésped.
+ */
+async function updateGuestPaymentProfile(guestId, { paymentCedula, paymentBank, paymentPhone }) {
+  await prisma.guest.update({
+    where: { id: guestId },
+    data: {
+      paymentBank,
+      paymentCedula: encryptField(paymentCedula),
+      paymentPhone: encryptField(paymentPhone),
+    },
+  })
+
+  return {
+    message: 'Datos de pago frecuente actualizados',
+    paymentProfile: {
+      bankCode: paymentBank,
+      bankName: bankName(paymentBank),
+      cedulaMasked: maskTail(paymentCedula, 4),
+      phoneMasked: maskTail(paymentPhone, 4),
+    },
+  }
+}
+
+/**
+ * Formatea el perfil de pago frecuente del huésped (enmascarado para respuestas API).
+ */
+function formatGuestPaymentProfile(guest) {
+  if (!guest.paymentBank || !guest.paymentCedula || !guest.paymentPhone) {
+    return null
+  }
+  const cedulaPlain = decryptField(guest.paymentCedula)
+  const phonePlain = decryptField(guest.paymentPhone)
+  return {
+    bankCode: guest.paymentBank,
+    bankName: bankName(guest.paymentBank),
+    cedulaMasked: maskTail(cedulaPlain, 4),
+    phoneMasked: maskTail(phonePlain, 4),
   }
 }
 
@@ -337,6 +393,8 @@ async function requestOtp(phone, purpose) {
 
 module.exports = {
   registerGuest,
+  updateGuestPaymentProfile,
+  formatGuestPaymentProfile,
   verifyGuestOtp,
   loginGuest,
   registerOwner,

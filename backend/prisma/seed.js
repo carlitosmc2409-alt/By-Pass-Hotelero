@@ -25,10 +25,17 @@ async function main() {
   })
   console.log('✅ Propietario:', owner.email)
 
-  // Hotel de prueba
+  // Hotel de prueba (con datos receptores de Pago Móvil en Banco de Venezuela)
+  const paymentInfo = {
+    bank: '0102',
+    bankName: 'Banco de Venezuela',
+    phone: '+584121234567',
+    idNumber: 'J-50123456-7',
+    holderName: 'Inversiones La Brisa C.A.',
+  }
   const hotel = await prisma.hotel.upsert({
     where: { slug: 'motel-la-brisa-caracas' },
-    update: {},
+    update: { paymentInfo },
     create: {
       ownerId: owner.id,
       name: 'Motel La Brisa',
@@ -40,6 +47,7 @@ async function main() {
       longitude: -66.9036,
       description: 'Disfruta con total privacidad.',
       status: 'ACTIVE',
+      paymentInfo,
     },
   })
   console.log('✅ Hotel:', hotel.name)
@@ -94,18 +102,27 @@ async function main() {
     console.log(`✅ Habitación: ${roomData.name}`)
   }
 
-  // Huésped de prueba
+  // Huésped de prueba (con datos de pago frecuente cifrados)
   const guestPassword = await bcrypt.hash('Guest@12345', 12)
   const { hashValue } = require('../src/utils/crypto')
+  const { encryptField } = require('../src/utils/fieldCrypto')
   const phone = '+584129876543'
+  const cedula = 'V-20123456'
   const guest = await prisma.guest.upsert({
     where: { phone },
-    update: {},
+    update: {
+      paymentBank: '0102',
+      paymentCedula: encryptField(cedula),
+      paymentPhone: encryptField(phone),
+    },
     create: {
       fullName: 'María González',
       phone,
       phoneHash: hashValue(phone),
-      cedula: 'V-20123456',
+      cedula,
+      paymentBank: '0102',
+      paymentCedula: encryptField(cedula),
+      paymentPhone: encryptField(phone),
       passwordHash: guestPassword,
       isVerified: true,
     },

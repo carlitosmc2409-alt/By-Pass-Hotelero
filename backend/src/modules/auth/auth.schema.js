@@ -1,4 +1,5 @@
 const { z } = require('zod')
+const { BANK_CODES } = require('../../utils/banks')
 
 // Teléfono venezolano: +58 seguido de 10 dígitos (ej: +584121234567)
 const venezuelaPhone = z
@@ -11,21 +12,32 @@ const cedulaBase = z
   .regex(/^[VEve]-?\d{6,8}$/, 'Cédula inválida. Formato: V-12345678 o E-12345678')
   .transform(v => v.toUpperCase().replace('-', '').replace(/^([VE])(\d+)$/, '$1-$2'))
 
-const cedulaOptional = cedulaBase.optional()
-const cedulaRequired = cedulaBase
+const bankCodeSchema = z
+  .string({ required_error: 'El banco es obligatorio' })
+  .refine(code => BANK_CODES.includes(code), 'Código de banco venezolano inválido (ej: 0102)')
 
 // ── Huésped ──────────────────────────────────────────────────
 
 const registerGuestSchema = z.object({
   fullName: z.string().min(3, 'Nombre muy corto').max(100),
   phone: venezuelaPhone,
-  cedula: cedulaOptional,
+  cedula: cedulaBase,
+  // Datos de pago frecuente (Pago Móvil) obligatorios en el registro
+  paymentBank: bankCodeSchema,
+  paymentPhone: venezuelaPhone.optional(), // si no se envía, usa phone
+  paymentCedula: cedulaBase.optional(),    // si no se envía, usa cedula
   password: z
     .string()
     .min(8, 'Contraseña mínima de 8 caracteres')
     .max(100)
     .regex(/[A-Z]/, 'Debe tener al menos una mayúscula')
     .regex(/[0-9]/, 'Debe tener al menos un número'),
+})
+
+const updatePaymentProfileSchema = z.object({
+  paymentCedula: cedulaBase,
+  paymentBank: bankCodeSchema,
+  paymentPhone: venezuelaPhone,
 })
 
 const verifyOtpSchema = z.object({
@@ -54,7 +66,7 @@ const registerOwnerSchema = z.object({
   fullName: z.string().min(3).max(100),
   email: z.string().email('Email inválido'),
   phone: venezuelaPhone,
-  cedula: cedulaRequired,
+  cedula: cedulaBase,
   password: z
     .string()
     .min(10, 'Contraseña mínima de 10 caracteres para propietarios')
@@ -71,6 +83,7 @@ const loginOwnerSchema = z.object({
 
 module.exports = {
   registerGuestSchema,
+  updatePaymentProfileSchema,
   verifyOtpSchema,
   loginGuestSchema,
   refreshTokenSchema,
