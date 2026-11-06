@@ -194,8 +194,8 @@ class _HotelsScreenState extends State<HotelsScreen> {
                                       ),
                                       decoration: BoxDecoration(
                                         color: room.isAvailable
-                                            ? AppTheme.accent.withOpacity(0.15)
-                                            : AppTheme.warning.withOpacity(0.15),
+                                            ? AppTheme.accent.withValues(alpha: 0.15)
+                                            : AppTheme.warning.withValues(alpha: 0.15),
                                         borderRadius: BorderRadius.circular(20),
                                       ),
                                       child: Text(

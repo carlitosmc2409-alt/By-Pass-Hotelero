@@ -223,7 +223,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                       Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: AppTheme.accent.withOpacity(0.12),
+                          color: AppTheme.accent.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Row(
