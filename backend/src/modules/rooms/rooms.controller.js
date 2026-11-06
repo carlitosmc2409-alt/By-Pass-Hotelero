@@ -75,9 +75,29 @@ async function handleUpdateStatus(request, reply) {
     return reply.status(403).send({ message: 'Sin acceso' })
   }
 
-  const updated = await prisma.room.update({
-    where: { id: request.params.id },
-    data: { status },
+  const updated = await prisma.$transaction(async (tx) => {
+    if (room.status === 'OCCUPIED') {
+      const activeReservations = await tx.reservation.findMany({
+        where: { roomId: room.id, status: 'ACTIVE' },
+        select: { id: true },
+      })
+      if (activeReservations.length > 0) {
+        const ids = activeReservations.map(r => r.id)
+        await tx.reservation.updateMany({
+          where: { id: { in: ids } },
+          data: { status: 'COMPLETED' },
+        })
+        await tx.accessToken.updateMany({
+          where: { reservationId: { in: ids } },
+          data: { isActive: false },
+        })
+      }
+    }
+
+    return tx.room.update({
+      where: { id: request.params.id },
+      data: { status },
+    })
   })
   return reply.send(updated)
 }
