@@ -1,4 +1,5 @@
 const { prisma } = require('../../config/database')
+const { emitRealtimeEvent } = require('../../utils/eventBus')
 const { z } = require('zod')
 
 const createRoomSchema = z.object({
@@ -21,7 +22,6 @@ const updateRoomSchema = createRoomSchema.omit({ hotelId: true }).partial()
 async function handleCreate(request, reply) {
   const data = createRoomSchema.parse(request.body)
 
-  // Verificar que el hotel es del propietario
   const hotel = await prisma.hotel.findUnique({ where: { id: data.hotelId } })
   if (!hotel || hotel.ownerId !== request.user.id) {
     return reply.status(403).send({ message: 'Sin acceso a este hotel' })
@@ -60,7 +60,7 @@ async function handleUpdate(request, reply) {
   return reply.send(updated)
 }
 
-// PATCH /api/v1/rooms/:id/status
+// PATCH /api/v1/rooms/:id/status  — Propietario cambia estado (incluye liberar OCCUPIED)
 async function handleUpdateStatus(request, reply) {
   const { status } = z.object({
     status: z.enum(['AVAILABLE', 'CLEANING', 'MAINTENANCE', 'DISABLED']),
@@ -99,7 +99,70 @@ async function handleUpdateStatus(request, reply) {
       data: { status },
     })
   })
+
+  emitRealtimeEvent({
+    hotelId: room.hotelId,
+    type: 'ROOM_STATUS_CHANGED',
+    payload: { roomId: room.id, roomName: room.name, status },
+    cleaningSafePayload: { roomId: room.id, roomName: room.name, status },
+  })
+
   return reply.send(updated)
 }
 
-module.exports = { handleCreate, handleGetOne, handleUpdate, handleUpdateStatus }
+// PATCH /api/v1/rooms/:id/cleaning-status  — Personal CLEANING habilita hab limpia o reporta avería
+async function handleCleaningStatusUpdate(request, reply) {
+  const { status } = z.object({
+    status: z.enum(['AVAILABLE', 'MAINTENANCE']),
+  }).parse(request.body)
+
+  const room = await prisma.room.findUnique({
+    where: { id: request.params.id },
+    include: { hotel: true },
+  })
+  if (!room) return reply.status(404).send({ message: 'Habitación no encontrada' })
+
+  const isOwner = request.user.role === 'OWNER' && room.hotel.ownerId === request.user.id
+  const isCleaning = request.user.role === 'CLEANING' && request.user.hotelId === room.hotelId
+  if (!isOwner && !isCleaning) {
+    return reply.status(403).send({ message: 'Sin permiso operativo sobre esta habitación' })
+  }
+
+  if (room.status === 'OCCUPIED') {
+    return reply.status(400).send({
+      message: 'No se puede habilitar ni alterar una habitación ocupada desde el panel de limpieza',
+    })
+  }
+
+  const updated = await prisma.room.update({
+    where: { id: room.id },
+    data: { status },
+    select: { id: true, name: true, status: true, updatedAt: true },
+  })
+
+  emitRealtimeEvent({
+    hotelId: room.hotelId,
+    type: 'ROOM_STATUS_CHANGED',
+    payload: {
+      roomId: room.id,
+      roomName: room.name,
+      status,
+      updatedByRole: request.user.role,
+    },
+    cleaningSafePayload: {
+      roomId: room.id,
+      roomName: room.name,
+      status,
+    },
+  })
+
+  return reply.send(updated)
+}
+
+module.exports = {
+  handleCreate,
+  handleGetOne,
+  handleUpdate,
+  handleUpdateStatus,
+  handleCleaningStatusUpdate,
+}

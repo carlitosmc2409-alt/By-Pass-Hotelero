@@ -9,6 +9,7 @@ const {
   requestOtpSchema,
   registerOwnerSchema,
   loginOwnerSchema,
+  loginCleaningSchema,
 } = require('./auth.schema')
 
 // ── GUEST ─────────────────────────────────────────────────────
@@ -125,6 +126,12 @@ async function handleOwnerProfile(request, reply) {
   return reply.send(owner)
 }
 
+async function handleLoginCleaning(request, reply) {
+  const data = loginCleaningSchema.parse(request.body)
+  const result = await authService.loginCleaningStaff(data, request.server)
+  return reply.send(result)
+}
+
 module.exports = {
   handleRegisterGuest,
   handleVerifyOtp,
@@ -138,4 +145,5 @@ module.exports = {
   handleRegisterOwner,
   handleLoginOwner,
   handleOwnerProfile,
+  handleLoginCleaning,
 }

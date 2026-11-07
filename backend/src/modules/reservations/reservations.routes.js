@@ -16,6 +16,21 @@ async function reservationsRoutes(fastify) {
     preHandler: [fastify.authenticate, fastify.authorizeGuest],
   }, ctrl.handleExtend)
 
+  // Huésped: crear pedido anónimo Room Service (entrega por esclusa/pasaplatos)
+  fastify.post('/:id/room-service', {
+    preHandler: [fastify.authenticate, fastify.authorizeGuest],
+  }, ctrl.handleCreateRoomServiceOrder)
+
+  // Huésped o propietario: consultar pedidos Room Service de una estadía
+  fastify.get('/:id/orders', {
+    preHandler: [fastify.authenticate],
+  }, ctrl.handleListRoomServiceOrders)
+
+  // Personal de limpieza o propietario: marcar pedido Room Service entregado en pasaplatos
+  fastify.patch('/:orderId/deliver-order', {
+    preHandler: [fastify.authenticate, fastify.authorizeCleaningOrOwner],
+  }, ctrl.handleDeliverRoomServiceOrder)
+
   // Huésped o propietario: detalle de reserva
   fastify.get('/:id', {
     preHandler: [fastify.authenticate],

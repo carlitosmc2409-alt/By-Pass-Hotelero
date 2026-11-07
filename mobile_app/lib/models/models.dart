@@ -88,11 +88,11 @@ class RoomModel {
 
   factory RoomModel.fromJson(Map<String, dynamic> json) {
     return RoomModel(
-      id: json['id'] as String,
-      name: json['name'] as String,
+      id: (json['id'] as String?) ?? '',
+      name: (json['name'] as String?) ?? '',
       type: (json['type'] as String?) ?? 'STANDARD',
-      pricePerHour: double.parse(json['pricePerHour'].toString()),
-      pricePerNight: double.parse(json['pricePerNight'].toString()),
+      pricePerHour: double.tryParse(json['pricePerHour']?.toString() ?? '') ?? 10,
+      pricePerNight: double.tryParse(json['pricePerNight']?.toString() ?? '') ?? 50,
       currency: (json['currency'] as String?) ?? 'USD',
       amenities: (json['amenities'] as List<dynamic>? ?? [])
           .map((e) => e.toString())
@@ -108,6 +108,7 @@ class HotelModel {
   final String address;
   final String city;
   final String? description;
+  final bool faacEnabled;
   final List<RoomModel> rooms;
 
   const HotelModel({
@@ -116,17 +117,19 @@ class HotelModel {
     required this.address,
     required this.city,
     this.description,
+    this.faacEnabled = true,
     this.rooms = const [],
   });
 
   factory HotelModel.fromJson(Map<String, dynamic> json) {
     final roomsJson = json['rooms'] as List<dynamic>? ?? [];
     return HotelModel(
-      id: json['id'] as String,
-      name: json['name'] as String,
+      id: (json['id'] as String?) ?? '',
+      name: (json['name'] as String?) ?? 'Hotel',
       address: (json['address'] as String?) ?? '',
       city: (json['city'] as String?) ?? '',
       description: json['description'] as String?,
+      faacEnabled: json['faacEnabled'] != false,
       rooms: roomsJson
           .map((r) => RoomModel.fromJson(r as Map<String, dynamic>))
           .toList(),
@@ -138,6 +141,7 @@ class CreatedReservation {
   final String reservationId;
   final String? parentReservationId;
   final bool isExtension;
+  final bool isRoomService;
   final String paymentId;
   final double totalAmount;
   final String currency;
@@ -152,6 +156,7 @@ class CreatedReservation {
     required this.reservationId,
     this.parentReservationId,
     this.isExtension = false,
+    this.isRoomService = false,
     required this.paymentId,
     required this.totalAmount,
     required this.currency,
@@ -164,7 +169,7 @@ class CreatedReservation {
   });
 
   String get effectiveQrReservationId =>
-      isExtension && parentReservationId != null
+      (isExtension || isRoomService) && parentReservationId != null
           ? parentReservationId!
           : reservationId;
 
@@ -173,6 +178,7 @@ class CreatedReservation {
       reservationId: json['reservationId'] as String,
       parentReservationId: json['parentReservationId'] as String?,
       isExtension: json['isExtension'] == true,
+      isRoomService: json['isRoomService'] == true,
       paymentId: json['paymentId'] as String,
       totalAmount: double.parse(json['totalAmount'].toString()),
       currency: (json['currency'] as String?) ?? 'USD',
@@ -196,6 +202,7 @@ class GuestReservationSummary {
   final DateTime checkIn;
   final DateTime checkOut;
   final bool isExtension;
+  final bool isRoomService;
   final String? parentReservationId;
   final RoomModel room;
   final HotelModel hotel;
@@ -211,6 +218,7 @@ class GuestReservationSummary {
     required this.checkIn,
     required this.checkOut,
     required this.isExtension,
+    this.isRoomService = false,
     this.parentReservationId,
     required this.room,
     required this.hotel,
@@ -233,6 +241,7 @@ class GuestReservationSummary {
       reservationId: id,
       parentReservationId: parentReservationId,
       isExtension: isExtension,
+      isRoomService: isRoomService,
       paymentId: pay['id'] as String,
       totalAmount: totalAmount,
       currency: currency,
@@ -257,6 +266,7 @@ class GuestReservationSummary {
       checkIn: DateTime.parse(json['checkIn'] as String),
       checkOut: DateTime.parse(json['checkOut'] as String),
       isExtension: json['isExtension'] == true,
+      isRoomService: json['isRoomService'] == true,
       parentReservationId: json['parentReservationId'] as String?,
       room: RoomModel(
         id: (roomMap['id'] as String?) ?? '',
@@ -281,22 +291,92 @@ class GuestReservationSummary {
   }
 }
 
+class RoomServiceItem {
+  final String id;
+  final String name;
+  final String category;
+  final double priceUsd;
+  final String description;
+
+  const RoomServiceItem({
+    required this.id,
+    required this.name,
+    required this.category,
+    required this.priceUsd,
+    required this.description,
+  });
+
+  factory RoomServiceItem.fromJson(Map<String, dynamic> json) {
+    return RoomServiceItem(
+      id: json['id'].toString(),
+      name: json['name'].toString(),
+      category: (json['category'] ?? 'CONSUMO').toString().trim(),
+      priceUsd: double.tryParse(json['priceUsd']?.toString() ?? '') ?? 0,
+      description: (json['description'] ?? '').toString(),
+    );
+  }
+}
+
+class RoomServiceOrder {
+  final String orderId;
+  final String paymentStatus;
+  final String deliveryStatus;
+  final double totalAmount;
+  final List<Map<String, dynamic>> items;
+  final DateTime createdAt;
+
+  const RoomServiceOrder({
+    required this.orderId,
+    required this.paymentStatus,
+    required this.deliveryStatus,
+    required this.totalAmount,
+    required this.items,
+    required this.createdAt,
+  });
+
+  bool get isDelivered => deliveryStatus == 'DELIVERED_PASATURNO';
+  bool get isPaid => paymentStatus == 'APPROVED';
+
+  factory RoomServiceOrder.fromJson(Map<String, dynamic> json) {
+    return RoomServiceOrder(
+      orderId: json['orderId'].toString(),
+      paymentStatus: (json['paymentStatus'] ?? 'PENDING').toString(),
+      deliveryStatus: (json['deliveryStatus'] ?? 'AWAITING_PAYMENT').toString(),
+      totalAmount: double.tryParse(json['totalAmount']?.toString() ?? '') ?? 0,
+      items: ((json['items'] as List<dynamic>?) ?? []).cast<Map<String, dynamic>>(),
+      createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? '') ?? DateTime.now(),
+    );
+  }
+}
+
 class QrAccessData {
   final String qrDataUrl;
   final String rawToken;
   final DateTime validFrom;
   final DateTime validUntil;
+  final String hotelId;
   final String hotelName;
   final String roomName;
+  final Map<String, dynamic> faac;
 
   const QrAccessData({
     required this.qrDataUrl,
     required this.rawToken,
     required this.validFrom,
     required this.validUntil,
+    required this.hotelId,
     required this.hotelName,
     required this.roomName,
+    this.faac = const {},
   });
+
+  bool get faacEnabled => faac['enabled'] != false;
+  String get faacModel =>
+      (faac['model'] ?? 'FAAC 615 BPR / Placa E615').toString();
+  String get faacEntryDevice =>
+      (faac['entryDeviceId'] ?? 'faac-entrada-1').toString();
+  String get faacExitDevice =>
+      (faac['exitDeviceId'] ?? 'faac-salida-1').toString();
 
   factory QrAccessData.fromJson(Map<String, dynamic> json) {
     return QrAccessData(
@@ -304,8 +384,10 @@ class QrAccessData {
       rawToken: json['rawToken'] as String,
       validFrom: DateTime.parse(json['validFrom'] as String),
       validUntil: DateTime.parse(json['validUntil'] as String),
+      hotelId: (json['hotelId'] ?? '').toString(),
       hotelName: json['hotelName'] as String,
       roomName: json['roomName'] as String,
+      faac: (json['faac'] as Map<String, dynamic>?) ?? const {},
     );
   }
 }

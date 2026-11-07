@@ -3,6 +3,7 @@ import 'core/api_client.dart';
 import 'core/theme.dart';
 import 'screens/auth_screen.dart';
 import 'screens/hotels_screen.dart';
+import 'screens/stealth_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,6 +40,19 @@ class _StayPassAppState extends State<StayPassApp> {
       title: 'StayPass QR',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
+      builder: (context, child) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: StealthCalculatorScreen.active,
+          builder: (context, isStealth, _) {
+            if (isStealth) {
+              return StealthCalculatorScreen(
+                onUnlock: StealthCalculatorScreen.disable,
+              );
+            }
+            return child ?? const SizedBox.shrink();
+          },
+        );
+      },
       home: _authenticated
           ? HotelsScreen(
               api: _api,

@@ -2,17 +2,70 @@ const QRCode = require('qrcode')
 const { generateQrToken } = require('./crypto')
 const dayjs = require('dayjs')
 const { prisma } = require('../config/database')
+const { normalizeHotelSettings } = require('./hotelSettings')
+const { emitRealtimeEvent } = require('./eventBus')
+
+/**
+ * Dispara el pulso de contacto seco hacia el controlador de Barrera Vehicular FAAC
+ * (ej. placas FAAC E615 / E620 / E680 en bornera OPEN-A + GND) vía relé IP opcional
+ * y transmite el evento en tiempo real por SSE al Panel, App y Terminal IoT.
+ */
+function triggerFaacBarrierPulse({
+  hotelId,
+  guestId = null,
+  reservationId = null,
+  roomName = null,
+  direction = 'ENTRY', // 'ENTRY' | 'EXIT'
+  deviceId,
+  faacConfig,
+  triggeredBy = 'QR_SCANNER',
+}) {
+  const pulse = {
+    controller: 'FAAC',
+    model: faacConfig?.model || 'FAAC 615 BPR / Placa E615',
+    direction,
+    deviceId: deviceId || (direction === 'EXIT' ? faacConfig?.exitDeviceId : faacConfig?.entryDeviceId) || 'faac-entrada-1',
+    contact: faacConfig?.contactType || 'NO (OPEN-A + GND)',
+    pulseDurationMs: Number(faacConfig?.pulseDurationMs || 1000),
+    roomName,
+    triggeredBy,
+    triggeredAt: new Date().toISOString(),
+  }
+
+  const webhookUrl = typeof faacConfig?.relayWebhookUrl === 'string'
+    ? faacConfig.relayWebhookUrl.trim()
+    : ''
+  if (/^https?:\/\//i.test(webhookUrl)) {
+    fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pulse),
+      signal: AbortSignal.timeout(2500),
+    }).catch(() => {})
+  }
+
+  emitRealtimeEvent({
+    hotelId,
+    guestId,
+    reservationId,
+    type: 'FAAC_BARRIER_PULSE',
+    payload: pulse,
+    cleaningSafePayload: {
+      controller: 'FAAC',
+      direction,
+      deviceId: pulse.deviceId,
+      roomName,
+      triggeredAt: pulse.triggeredAt,
+    },
+  })
+
+  return pulse
+}
 
 /**
  * Emite (o rota) el token QR de una reserva confirmada.
- * Solo se guarda el hash del token, por lo que el token en claro solo existe
- * en esta respuesta. Cada llamada ROTA el token: el QR anterior deja de
- * funcionar y se devuelve uno nuevo (conserva usedCount y la ventana de tiempo).
- *
- * @param {string} reservationId
- * @param {Date} checkIn
- * @param {Date} checkOut
- * @returns {{ qrDataUrl: string, rawToken: string, validFrom: Date, validUntil: Date, accessTokenId: string }}
+ * Margen amplio (quiet zone = 3) y corrección 'H' optimizados para lectores ópticos
+ * exteriores en pedestales de barreras vehiculares FAAC y cerraduras de habitación.
  */
 async function generateReservationQr(reservationId, checkIn, checkOut) {
   const { rawToken, tokenHash } = generateQrToken(reservationId)
@@ -24,6 +77,7 @@ async function generateReservationQr(reservationId, checkIn, checkOut) {
       tokenHash,
       validFrom: checkIn,
       validUntil: checkOut,
+      maxUses: 30,
       isActive: true,
     },
     update: {
@@ -34,21 +88,19 @@ async function generateReservationQr(reservationId, checkIn, checkOut) {
     },
   })
 
-  // Generar imagen QR a partir del rawToken
-  // El rawToken incluye la info de la reserva y la firma — nunca la cédula ni datos del huésped
   const qrDataUrl = await QRCode.toDataURL(rawToken, {
     errorCorrectionLevel: 'H',
-    width: 400,
-    margin: 2,
+    width: 480,
+    margin: 3,
     color: {
-      dark: '#1a1a2e',
+      dark: '#09090e',
       light: '#ffffff',
     },
   })
 
   return {
     qrDataUrl,
-    rawToken,         // se envía al cliente; NO se guarda en BD
+    rawToken,
     validFrom: accessToken.validFrom,
     validUntil: accessToken.validUntil,
     accessTokenId: accessToken.id,
@@ -56,17 +108,12 @@ async function generateReservationQr(reservationId, checkIn, checkOut) {
 }
 
 /**
- * Valida un token QR escaneado por la cerradura.
- * Registra el evento y retorna si se debe abrir o no.
- *
- * @param {string} rawToken - Token recibido del QR
- * @param {string} deviceId - ID de la cerradura que escanea
- * @returns {{ allowed: boolean, message: string, reservationId?: string }}
+ * Valida un token QR escaneado por barrera vehicular FAAC, garaje o cerradura de puerta.
  */
 async function validateQrToken(rawToken, deviceId = null) {
   const { validateQrTokenSignature, hashQrToken } = require('./crypto')
 
-  // 1. Verificar firma criptográfica
+  // 1. Verificar firma criptográfica HMAC-SHA256
   const signatureValid = validateQrTokenSignature(rawToken)
   if (!signatureValid) {
     await logAccessEvent(null, 'DENIED', deviceId, { reason: 'invalid_signature' })
@@ -82,7 +129,7 @@ async function validateQrToken(rawToken, deviceId = null) {
         include: {
           room: {
             include: {
-              hotel: { select: { id: true, name: true } },
+              hotel: { select: { id: true, name: true, settings: true } },
             },
           },
         },
@@ -95,9 +142,38 @@ async function validateQrToken(rawToken, deviceId = null) {
   }
 
   const now = dayjs()
+  const room = accessToken.reservation.room
+  const settings = normalizeHotelSettings(room.hotel?.settings)
+  const faacConfig = settings.faac
 
-  // 3. Verificar si está activo
-  if (!accessToken.isActive) {
+  const normalizedDevice = typeof deviceId === 'string' ? deviceId.trim().toLowerCase() : ''
+  const isFaacExit =
+    normalizedDevice.startsWith('faac-salida') ||
+    normalizedDevice.startsWith('faac-exit') ||
+    normalizedDevice.startsWith('barrera-salida')
+  const isFaacEntry =
+    (normalizedDevice.startsWith('faac') && !isFaacExit) ||
+    normalizedDevice.startsWith('barrera-faac')
+  const isGarageGate =
+    normalizedDevice.startsWith('garaje') ||
+    (normalizedDevice.startsWith('barrera') && !isFaacEntry && !isFaacExit) ||
+    normalizedDevice.startsWith('gate')
+  const isSharedGate =
+    !normalizedDevice ||
+    isFaacEntry ||
+    isFaacExit ||
+    isGarageGate ||
+    normalizedDevice.startsWith('lock-demo')
+
+  const exitGraceMinutes = Number(faacConfig?.exitGraceMinutes ?? 15)
+  const withinExitGrace =
+    isFaacExit &&
+    accessToken.reservation.status !== 'COMPLETED' &&
+    accessToken.reservation.status !== 'CANCELLED' &&
+    now.isBefore(dayjs(accessToken.validUntil).add(exitGraceMinutes, 'minute'))
+
+  // 3. Verificar si está activo (permitiendo gracia de salida en barrera FAAC de salida)
+  if (!accessToken.isActive && !withinExitGrace) {
     await logAccessEvent(accessToken.id, 'EXPIRED', deviceId, { reason: 'inactive' })
     return { allowed: false, message: 'Código QR desactivado' }
   }
@@ -108,8 +184,8 @@ async function validateQrToken(rawToken, deviceId = null) {
     return { allowed: false, message: 'La reserva aún no ha comenzado' }
   }
 
-  if (now.isAfter(dayjs(accessToken.validUntil))) {
-    // Marcar como inactivo
+  const isPastValidUntil = now.isAfter(dayjs(accessToken.validUntil))
+  if (isPastValidUntil && !withinExitGrace) {
     await prisma.accessToken.update({
       where: { id: accessToken.id },
       data: { isActive: false },
@@ -124,16 +200,7 @@ async function validateQrToken(rawToken, deviceId = null) {
     return { allowed: false, message: 'Número máximo de accesos alcanzado' }
   }
 
-  // 5.5 Verificar correspondencia de cerradura específica de habitación vs barrera de garaje
-  const room = accessToken.reservation.room
-  const normalizedDevice = typeof deviceId === 'string' ? deviceId.trim().toLowerCase() : ''
-  const isSharedGate =
-    !normalizedDevice ||
-    normalizedDevice.startsWith('garaje') ||
-    normalizedDevice.startsWith('barrera') ||
-    normalizedDevice.startsWith('gate') ||
-    normalizedDevice.startsWith('lock-demo')
-
+  // 5.5 Verificar correspondencia de cerradura específica de habitación vs barrera vehicular
   if (!isSharedGate) {
     const slugRoomLock = 'lock-' + String(room.name).trim().toLowerCase().replace(/\s+/g, '-')
     const configuredLock = room.lockDeviceId ? String(room.lockDeviceId).trim().toLowerCase() : null
@@ -155,29 +222,71 @@ async function validateQrToken(rawToken, deviceId = null) {
     }
   }
 
-  // 6. ✅ Acceso permitido — incrementar contador
+  // 6. Acceso permitido — incrementar contador
   const updatedToken = await prisma.accessToken.update({
     where: { id: accessToken.id },
     data: { usedCount: { increment: 1 } },
   })
 
-  await logAccessEvent(accessToken.id, 'OPEN', deviceId)
+  let accessZone = 'ROOM_DOOR'
+  if (isFaacEntry) accessZone = 'FAAC_ENTRY'
+  else if (isFaacExit) accessZone = 'FAAC_EXIT'
+  else if (isGarageGate) accessZone = 'GARAGE_GATE'
 
-  const isGarageGate =
-    normalizedDevice.startsWith('garaje') ||
-    normalizedDevice.startsWith('barrera') ||
-    normalizedDevice.startsWith('gate')
+  await logAccessEvent(accessToken.id, 'OPEN', deviceId, {
+    accessZone,
+    usedExitGrace: Boolean(isPastValidUntil && withinExitGrace),
+  })
+
+  let faacPulse = null
+  if (isFaacEntry || isFaacExit) {
+    faacPulse = triggerFaacBarrierPulse({
+      hotelId: room.hotel.id,
+      guestId: accessToken.reservation.guestId,
+      reservationId: accessToken.reservationId,
+      roomName: room.name,
+      direction: isFaacExit ? 'EXIT' : 'ENTRY',
+      deviceId: deviceId || (isFaacExit ? faacConfig.exitDeviceId : faacConfig.entryDeviceId),
+      faacConfig,
+      triggeredBy: 'QR_TOTEM',
+    })
+  } else {
+    emitRealtimeEvent({
+      hotelId: room.hotel.id,
+      guestId: accessToken.reservation.guestId,
+      reservationId: accessToken.reservationId,
+      type: 'DOOR_UNLOCK_PULSE',
+      payload: {
+        accessZone,
+        deviceId: deviceId || null,
+        roomName: room.name,
+        triggeredAt: new Date().toISOString(),
+      },
+    })
+  }
+
+  let message = `Cerradura desbloqueada · Habitación ${room.name}`
+  if (isFaacEntry) {
+    message = `Barrera FAAC de Entrada abierta · Avanza a Habitación ${room.name}`
+  } else if (isFaacExit) {
+    message = isPastValidUntil
+      ? `Barrera FAAC de Salida abierta (ventana de cortesía) · Buen viaje`
+      : `Barrera FAAC de Salida abierta · Habitación ${room.name}`
+  } else if (isGarageGate) {
+    message = `Barrera abierta · Dirígete a Habitación ${room.name}`
+  }
 
   return {
     allowed: true,
-    message: isGarageGate
-      ? `Barrera abierta · Dirígete a Habitación ${room.name}`
-      : `Cerradura desbloqueada · Habitación ${room.name}`,
+    message,
     reservationId: accessToken.reservationId,
     hotelName: room.hotel?.name || '',
     roomName: room.name,
     deviceId: deviceId || null,
-    accessZone: isGarageGate ? 'GARAGE_GATE' : 'ROOM_DOOR',
+    accessZone,
+    isBarrier: isFaacEntry || isFaacExit || isGarageGate,
+    usedExitGrace: Boolean(isPastValidUntil && withinExitGrace),
+    faacPulse,
     usedCount: updatedToken.usedCount,
     maxUses: updatedToken.maxUses,
     validUntil: accessToken.validUntil,
@@ -205,4 +314,5 @@ module.exports = {
   generateReservationQr,
   validateQrToken,
   invalidateQrToken,
+  triggerFaacBarrierPulse,
 }

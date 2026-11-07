@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -25,6 +26,7 @@ class ApiClient {
   String? _accessToken;
   String? _refreshToken;
 
+  String? get accessToken => _accessToken;
   bool get hasToken => _accessToken != null && _accessToken!.isNotEmpty;
 
   void setAccessToken(String? token) {
@@ -45,9 +47,7 @@ class ApiClient {
         _refreshToken = refresh;
         return true;
       }
-    } catch (_) {
-      // Entorno de pruebas sin plugin nativo
-    }
+    } catch (_) {}
     return false;
   }
 
@@ -124,6 +124,77 @@ class ApiClient {
       res = await requestFn();
     }
     return res;
+  }
+
+  /// Abre un stream SSE en tiempo real contra `/api/v1/events/stream` compatible con Web y Android.
+  Stream<Map<String, dynamic>> connectRealtimeEvents() {
+    late StreamController<Map<String, dynamic>> controller;
+    http.Client? client;
+    bool cancelled = false;
+
+    Future<void> runLoop() async {
+      while (!cancelled) {
+        final token = _accessToken;
+        if (token == null || token.isEmpty) break;
+        client = http.Client();
+        try {
+          final uri = Uri.parse(
+            '$baseUrl/events/stream?token=${Uri.encodeQueryComponent(token)}',
+          );
+          final req = http.Request('GET', uri);
+          req.headers['Accept'] = 'text/event-stream';
+          final streamed = await client!.send(req);
+
+          if (streamed.statusCode == 401) {
+            final ok = await _tryRefresh();
+            if (!ok) break;
+            continue;
+          }
+          if (streamed.statusCode != 200) {
+            await Future<void>.delayed(const Duration(seconds: 5));
+            continue;
+          }
+
+          await for (final line in streamed.stream
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())) {
+            if (cancelled) break;
+            if (line.startsWith('data:')) {
+              final raw = line.substring(5).trim();
+              if (raw.isNotEmpty) {
+                try {
+                  final decoded = jsonDecode(raw);
+                  if (decoded is Map<String, dynamic> && !controller.isClosed) {
+                    controller.add(decoded);
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+        } catch (_) {
+          // Reintentar silenciosamente tras micro-cortes
+        } finally {
+          client?.close();
+          client = null;
+        }
+        if (!cancelled) {
+          await Future<void>.delayed(const Duration(seconds: 4));
+        }
+      }
+    }
+
+    controller = StreamController<Map<String, dynamic>>.broadcast(
+      onListen: () {
+        cancelled = false;
+        runLoop();
+      },
+      onCancel: () {
+        cancelled = true;
+        client?.close();
+      },
+    );
+
+    return controller.stream;
   }
 
   Future<dynamic> _decodeAny(http.Response res) async {
@@ -266,6 +337,18 @@ class ApiClient {
     return HotelModel.fromJson(data);
   }
 
+  Future<List<RoomServiceItem>> fetchHotelMenu(String hotelId) async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/hotels/$hotelId/menu'),
+      headers: _headers(jsonBody: false),
+    );
+    final data = await _decodeObj(res);
+    final items = (data['items'] as List<dynamic>?) ?? [];
+    return items
+        .map((e) => RoomServiceItem.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<List<GuestReservationSummary>> fetchMyReservations() async {
     final res = await _authorizedSend(
       () => http.get(
@@ -327,13 +410,48 @@ class ApiClient {
     return CreatedReservation.fromJson(data);
   }
 
+  Future<CreatedReservation> createRoomServiceOrder({
+    required String reservationId,
+    required List<Map<String, dynamic>> items,
+    String? guestNote,
+  }) async {
+    final res = await _authorizedSend(
+      () => http.post(
+        Uri.parse('$baseUrl/reservations/$reservationId/room-service'),
+        headers: _headers(),
+        body: jsonEncode({
+          'items': items,
+          if (guestNote != null && guestNote.isNotEmpty) 'guestNote': guestNote,
+          'gateway': 'PAGO_MOVIL',
+        }),
+      ),
+    );
+    final data = await _decodeObj(res);
+    return CreatedReservation.fromJson(data);
+  }
+
+  Future<List<RoomServiceOrder>> fetchRoomServiceOrders(
+    String reservationId,
+  ) async {
+    final res = await _authorizedSend(
+      () => http.get(
+        Uri.parse('$baseUrl/reservations/$reservationId/orders'),
+        headers: _headers(jsonBody: false),
+      ),
+    );
+    final list = (await _decodeAny(res)) as List<dynamic>;
+    return list
+        .map((e) => RoomServiceOrder.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<Map<String, dynamic>> submitPaymentReference({
     required String paymentId,
     required String gatewayRef,
   }) async {
     final res = await _authorizedSend(
       () => http.post(
-        Uri.parse('$baseUrl/payments/$paymentId/submit-proof'),
+        Uri.parse('$baseUrl/payments/${paymentId}/submit-proof'),
         headers: _headers(),
         body: jsonEncode({
           'gatewayRef': gatewayRef,
@@ -354,13 +472,33 @@ class ApiClient {
     return QrAccessData.fromJson(data);
   }
 
-  Future<Map<String, dynamic>> simulateDoorScan(String rawToken) async {
+  Future<Map<String, dynamic>> openFaacBarrier({
+    required String reservationId,
+    required String direction, // 'ENTRY' | 'EXIT'
+  }) async {
+    final res = await _authorizedSend(
+      () => http.post(
+        Uri.parse('$baseUrl/access/faac/open'),
+        headers: _headers(),
+        body: jsonEncode({
+          'reservationId': reservationId,
+          'direction': direction,
+        }),
+      ),
+    );
+    return _decodeObj(res);
+  }
+
+  Future<Map<String, dynamic>> simulateDoorScan(
+    String rawToken, {
+    String deviceId = 'lock-demo-flutter',
+  }) async {
     final res = await http.post(
       Uri.parse('$baseUrl/access/validate'),
       headers: _headers(),
       body: jsonEncode({
         'token': rawToken,
-        'deviceId': 'lock-demo-flutter',
+        'deviceId': deviceId,
       }),
     );
     return _decodeObj(res);

@@ -36,7 +36,7 @@ async function buildApp() {
 
   await app.register(rateLimit, {
     global: true,
-    max: 100,
+    max: env.isProd() ? 120 : 1000,
     timeWindow: '1 minute',
     errorResponseBuilder: () => ({
       statusCode: 429,
@@ -76,6 +76,17 @@ async function buildApp() {
     }
   })
 
+  // Verifica que el usuario sea personal operativo (CLEANING) o propietario (OWNER)
+  app.decorate('authorizeCleaningOrOwner', async function (request, reply) {
+    if (request.user?.role !== 'OWNER' && request.user?.role !== 'CLEANING') {
+      reply.status(403).send({
+        statusCode: 403,
+        error: 'Forbidden',
+        message: 'Acceso solo para personal operativo o propietario',
+      })
+    }
+  })
+
   // Verifica que el usuario autenticado sea huésped
   app.decorate('authorizeGuest', async function (request, reply) {
     if (request.user?.role !== 'GUEST') {
@@ -103,6 +114,7 @@ async function buildApp() {
   app.register(require('../modules/reservations/reservations.routes'), { prefix: `${prefix}/reservations` })
   app.register(require('../modules/payments/payments.routes'), { prefix: `${prefix}/payments` })
   app.register(require('../modules/access/access.routes'), { prefix: `${prefix}/access` })
+  app.register(require('../modules/events/events.routes'), { prefix: `${prefix}/events` })
 
   // ── Error handler global ──────────────────────────────────
   app.setErrorHandler((error, request, reply) => {

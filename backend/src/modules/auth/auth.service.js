@@ -278,6 +278,67 @@ async function loginOwner(email, password, app, meta = {}) {
   }, { ownerId: owner.id }, meta)
 }
 
+/**
+ * Login de personal operativo de limpieza/camareras (CLEANING) sin acceso financiero.
+ */
+async function loginCleaningStaff({ hotelCode, alias, pin }, app) {
+  const { normalizeHotelSettings } = require('../../utils/hotelSettings')
+  const cleanAlias = String(alias || '').trim().toLowerCase()
+  const cleanCode = String(hotelCode || '').trim().toLowerCase()
+
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanCode)
+  const hotels = await prisma.hotel.findMany({
+    where: {
+      status: 'ACTIVE',
+      ...(cleanCode
+        ? {
+            OR: [
+              ...(isUuid ? [{ id: cleanCode }] : []),
+              { slug: cleanCode },
+              { slug: { contains: cleanCode, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    },
+    select: { id: true, name: true, slug: true, settings: true },
+  })
+
+  for (const hotel of hotels) {
+    const settings = normalizeHotelSettings(hotel.settings)
+    const staff = settings.cleaningStaff.find(
+      s => s.active !== false && String(s.alias || '').toLowerCase() === cleanAlias
+    )
+    if (staff && staff.pinHash) {
+      const ok = await bcrypt.compare(String(pin), staff.pinHash)
+      if (ok) {
+        const accessToken = app.jwt.sign(
+          {
+            id: staff.id,
+            role: 'CLEANING',
+            hotelId: hotel.id,
+            hotelName: hotel.name,
+            fullName: staff.name,
+            alias: staff.alias,
+          },
+          { expiresIn: '12h' }
+        )
+        return {
+          accessToken,
+          role: 'CLEANING',
+          hotelId: hotel.id,
+          hotelName: hotel.name,
+          staffName: staff.name,
+          alias: staff.alias,
+        }
+      }
+    }
+  }
+
+  const error = new Error('Alias, código de hotel o PIN operativo incorrectos')
+  error.statusCode = 401
+  throw error
+}
+
 // ── TOKENS ────────────────────────────────────────────────────
 
 /**
@@ -399,6 +460,7 @@ module.exports = {
   loginGuest,
   registerOwner,
   loginOwner,
+  loginCleaningStaff,
   refreshAccessToken,
   revokeRefreshToken,
   requestOtp,

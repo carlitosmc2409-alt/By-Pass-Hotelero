@@ -45,6 +45,10 @@ async function authRoutes(fastify) {
   fastify.get('/owner/me', {
     preHandler: [fastify.authenticate, fastify.authorizeOwner],
   }, ctrl.handleOwnerProfile)
+
+  // ── Personal Operativo / Limpieza (sin acceso financiero) ──
+  // POST /api/v1/auth/cleaning/login
+  fastify.post('/cleaning/login', ctrl.handleLoginCleaning)
 }
 
 module.exports = authRoutes

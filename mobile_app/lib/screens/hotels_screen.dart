@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/api_client.dart';
 import '../core/theme.dart';
 import '../models/models.dart';
 import 'booking_payment_screen.dart';
 import 'qr_stay_screen.dart';
+import 'stealth_screen.dart';
 
 class HotelsScreen extends StatefulWidget {
   final ApiClient api;
@@ -21,6 +23,8 @@ class HotelsScreen extends StatefulWidget {
 
 class _HotelsScreenState extends State<HotelsScreen> {
   bool _loading = true;
+  bool _privacyMask = false;
+  bool _sseLive = false;
   String? _error;
   GuestProfile? _profile;
   List<HotelModel> _hotels = const [];
@@ -34,17 +38,69 @@ class _HotelsScreenState extends State<HotelsScreen> {
     BankOption(code: '0191', name: 'BNC'),
   ];
 
+  Timer? _clockTimer;
+  StreamSubscription<Map<String, dynamic>>? _sseSub;
+
   @override
   void initState() {
     super.initState();
     _loadData();
+    _startClock();
+    _connectRealtime();
   }
 
-  Future<void> _loadData() async {
-    setState(() {
-      _loading = true;
-      _error = null;
+  @override
+  void dispose() {
+    _clockTimer?.cancel();
+    _sseSub?.cancel();
+    super.dispose();
+  }
+
+  void _startClock() {
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _myReservations.any((r) => r.isActive)) {
+        setState(() {});
+      }
     });
+  }
+
+  void _connectRealtime() {
+    _sseSub = widget.api.connectRealtimeEvents().listen((event) {
+      if (!mounted) return;
+      final type = event['type']?.toString() ?? '';
+      if (type == 'CONNECTED') {
+        setState(() => _sseLive = true);
+        return;
+      }
+      if (type == 'ROOM_SERVICE_DELIVERED') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: AppTheme.accent,
+            content: Text(
+              '🛎️ ¡Tu pedido ya está listo en el pasaplatos de tu habitación!',
+              style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+            ),
+          ),
+        );
+      }
+      if (const {
+        'PAYMENT_APPROVED',
+        'ROOM_STATUS_CHANGED',
+        'ROOM_SERVICE_ORDER',
+        'ROOM_SERVICE_DELIVERED',
+      }.contains(type)) {
+        _loadData(silent: true);
+      }
+    });
+  }
+
+  Future<void> _loadData({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
 
     try {
       final results = await Future.wait([
@@ -69,16 +125,70 @@ class _HotelsScreenState extends State<HotelsScreen> {
         widget.onLogout();
         return;
       }
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted && !silent) setState(() => _error = e.toString());
     } catch (e) {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() => _error = e.toString());
       }
     } finally {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() => _loading = false);
       }
     }
+  }
+
+  Future<void> _openStealthPinSettings() async {
+    final currentPin = await StealthCalculatorScreen.getSavedPin();
+    if (!mounted) return;
+    final ctrl = TextEditingController(text: currentPin);
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Configurar Modo Camuflaje'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Al tocar el ícono de calculadora, toda la app se convierte al instante en una "Calculadora Rápida" real. Escribe tu PIN y pulsa "=" para regresar.',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondary),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ctrl,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              decoration: const InputDecoration(
+                labelText: 'PIN numérico privado',
+                prefixIcon: Icon(Icons.pin_outlined),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final next = ctrl.text.trim();
+              if (next.length >= 4) {
+                await StealthCalculatorScreen.savePin(next);
+                if (ctx.mounted) Navigator.of(ctx).pop();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('PIN de camuflaje actualizado ($next).')),
+                  );
+                }
+              }
+            },
+            child: const Text('Guardar PIN'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openEditPaymentProfileDialog() async {
@@ -106,7 +216,7 @@ class _HotelsScreenState extends State<HotelsScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Text(
-                        'Estos datos cifrados permiten que el sistema reconozca tus pagos al instante sin que escribas referencias.',
+                        'Estos datos cifrados permiten que el sistema reconozca tus pagos BDV al instante sin enviar capturas ni escribir referencias.',
                         style: TextStyle(
                           fontSize: 12.5,
                           color: AppTheme.textSecondary,
@@ -114,7 +224,7 @@ class _HotelsScreenState extends State<HotelsScreen> {
                       ),
                       const SizedBox(height: 14),
                       DropdownButtonFormField<String>(
-                        value: selectedBank,
+                        initialValue: selectedBank,
                         isExpanded: true,
                         decoration: const InputDecoration(
                           labelText: 'Banco emisor',
@@ -196,6 +306,10 @@ class _HotelsScreenState extends State<HotelsScreen> {
     }
   }
 
+  String _maskLabel(String original, {String fallback = 'Reserva Privada •••'}) {
+    return _privacyMask ? fallback : original;
+  }
+
   String _formatShortTime(DateTime dt) {
     final local = dt.toLocal();
     final dd = local.day.toString().padLeft(2, '0');
@@ -205,40 +319,136 @@ class _HotelsScreenState extends State<HotelsScreen> {
     return '$dd/$mo $hh:$mm';
   }
 
+  String _formatLiveRemaining(DateTime checkOut) {
+    final diff = checkOut.difference(DateTime.now());
+    if (diff.isNegative) return '00:00:00';
+    final hh = diff.inHours.toString().padLeft(2, '0');
+    final mm = diff.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final ss = diff.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$hh:$mm:$ss';
+  }
+
+  Future<void> _quickExtendStay(
+    GuestReservationSummary stay,
+    int extraHours,
+  ) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BookingPaymentScreen(
+          api: widget.api,
+          hotel: stay.hotel,
+          room: stay.room,
+          extendingReservationId: stay.id,
+          initialHours: extraHours,
+          autoStartHold: true,
+        ),
+      ),
+    );
+    _loadData();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final activeStay = _myReservations.where((r) => r.isActive).firstOrNull;
+    final mainReservations =
+        _myReservations.where((r) => !r.isRoomService).toList();
+    final activeStay = mainReservations.where((r) => r.isActive).firstOrNull;
     final pendingStay =
-        _myReservations.where((r) => r.isAwaitingPayment).firstOrNull;
+        mainReservations.where((r) => r.isAwaitingPayment).firstOrNull;
 
     return DefaultTabController(
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('StayPass QR'),
+          title: Row(
+            children: [
+              const Icon(Icons.qr_code_2_rounded, color: AppTheme.gold, size: 22),
+              const SizedBox(width: 8),
+              const Text('StayPass QR'),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: (_sseLive ? AppTheme.accent : AppTheme.textSecondary)
+                      .withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  _sseLive ? '● EN VIVO' : '● SYNC',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: _sseLive ? AppTheme.accent : AppTheme.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
           actions: [
             IconButton(
-              tooltip: 'Actualizar',
-              onPressed: _loadData,
-              icon: const Icon(Icons.refresh_rounded),
+              tooltip: _privacyMask
+                  ? 'Mostrar nombres reales'
+                  : 'Ocultar nombres en pantalla',
+              onPressed: () => setState(() => _privacyMask = !_privacyMask),
+              icon: Icon(
+                _privacyMask
+                    ? Icons.visibility_off_rounded
+                    : Icons.visibility_outlined,
+                color: _privacyMask ? AppTheme.gold : AppTheme.textSecondary,
+                size: 20,
+              ),
             ),
             IconButton(
-              tooltip: 'Cerrar sesión',
-              onPressed: widget.onLogout,
-              icon: const Icon(Icons.logout_rounded),
+              tooltip: 'Modo Camuflaje (Calculadora)',
+              onPressed: StealthCalculatorScreen.enable,
+              onLongPress: _openStealthPinSettings,
+              icon: const Icon(
+                Icons.calculate_outlined,
+                color: AppTheme.gold,
+                size: 21,
+              ),
+            ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert_rounded),
+              onSelected: (v) {
+                if (v == 'refresh') _loadData();
+                if (v == 'pin') _openStealthPinSettings();
+                if (v == 'payment') _openEditPaymentProfileDialog();
+                if (v == 'logout') widget.onLogout();
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'pin',
+                  child: Text('Configurar PIN de Camuflaje'),
+                ),
+                PopupMenuItem(
+                  value: 'payment',
+                  child: Text('Editar Pago Móvil Frecuente'),
+                ),
+                PopupMenuItem(
+                  value: 'refresh',
+                  child: Text('Sincronizar ahora'),
+                ),
+                PopupMenuItem(
+                  value: 'logout',
+                  child: Text('Cerrar sesión'),
+                ),
+              ],
             ),
           ],
           bottom: TabBar(
-            indicatorColor: AppTheme.accent,
+            indicatorColor: AppTheme.gold,
+            labelColor: AppTheme.gold,
+            unselectedLabelColor: AppTheme.textSecondary,
             tabs: [
               const Tab(
-                icon: Icon(Icons.meeting_room_outlined, size: 19),
-                text: 'Habitaciones',
+                icon: Icon(Icons.king_bed_outlined, size: 19),
+                text: 'Suites & Acceso FAAC',
               ),
               Tab(
                 icon: Badge(
+                  backgroundColor: AppTheme.accent,
                   isLabelVisible: activeStay != null || pendingStay != null,
-                  child: const Icon(Icons.qr_code_2_rounded, size: 19),
+                  child: const Icon(Icons.vpn_key_outlined, size: 19),
                 ),
                 text: 'Mis Estadías',
               ),
@@ -270,7 +480,7 @@ class _HotelsScreenState extends State<HotelsScreen> {
                 : TabBarView(
                     children: [
                       _buildExploreTab(activeStay, pendingStay),
-                      _buildMyStaysTab(),
+                      _buildMyStaysTab(mainReservations),
                     ],
                   ),
       ),
@@ -282,6 +492,11 @@ class _HotelsScreenState extends State<HotelsScreen> {
     GuestReservationSummary? pendingStay,
   ) {
     final paymentProfile = _profile?.paymentProfile;
+    final remainingMinutes = activeStay != null
+        ? activeStay.checkOut.difference(DateTime.now()).inMinutes
+        : 999;
+    final expiringSoon =
+        activeStay != null && remainingMinutes <= 15 && remainingMinutes >= -15;
 
     return RefreshIndicator(
       onRefresh: _loadData,
@@ -290,41 +505,146 @@ class _HotelsScreenState extends State<HotelsScreen> {
         children: [
           if (activeStay != null) ...[
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                color: AppTheme.accent.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(16),
+                gradient: LinearGradient(
+                  colors: [
+                    (expiringSoon ? AppTheme.warning : AppTheme.accent)
+                        .withValues(alpha: 0.18),
+                    AppTheme.card,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(22),
                 border: Border.all(
-                  color: AppTheme.accent.withValues(alpha: 0.45),
+                  color: (expiringSoon ? AppTheme.warning : AppTheme.accent)
+                      .withValues(alpha: 0.5),
                 ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.vpn_key_rounded, color: AppTheme.accent),
-                      const SizedBox(width: 10),
-                      Expanded(
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.vpn_key_rounded,
+                            color:
+                                expiringSoon ? AppTheme.warning : AppTheme.accent,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            expiringSoon
+                                ? '⚠️ VENCIMIENTO PRÓXIMO'
+                                : 'ESTADÍA VIP ACTIVA',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 11.5,
+                              letterSpacing: 0.7,
+                              color: expiringSoon
+                                  ? AppTheme.warning
+                                  : AppTheme.accent,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.4),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         child: Text(
-                          'Estadía Activa · Habitación ${activeStay.room.name} (${activeStay.hotel.name})',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
+                          '⏱ ${_formatLiveRemaining(activeStay.checkOut)}',
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13,
+                            color: expiringSoon
+                                ? AppTheme.warning
+                                : AppTheme.textPrimary,
                           ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 10),
                   Text(
-                    'Salida prevista: ${_formatShortTime(activeStay.checkOut)}',
+                    _maskLabel(
+                      'Habitación ${activeStay.room.name} · ${activeStay.hotel.name}',
+                      fallback: 'Suite Privada Activa •••',
+                    ),
                     style: const TextStyle(
-                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 17,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    'Salida: ${_formatShortTime(activeStay.checkOut)} · Pase Barrera FAAC habilitado (+15m gracia de salida)',
+                    style: const TextStyle(
+                      fontSize: 12,
                       color: AppTheme.textSecondary,
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  if (expiringSoon) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.warning.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: AppTheme.warning.withValues(alpha: 0.45),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Alerta silenciosa ≤15 min: extiende en 1 toque sin llamar a recepción:',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ActionChip(
+                            backgroundColor: AppTheme.gold,
+                            label: const Text(
+                              '+1h',
+                              style: TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            onPressed: () => _quickExtendStay(activeStay, 1),
+                          ),
+                          const SizedBox(width: 6),
+                          ActionChip(
+                            backgroundColor: AppTheme.gold,
+                            label: const Text(
+                              '+2h',
+                              style: TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            onPressed: () => _quickExtendStay(activeStay, 2),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
                   Wrap(
                     spacing: 10,
                     runSpacing: 8,
@@ -333,7 +653,7 @@ class _HotelsScreenState extends State<HotelsScreen> {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppTheme.accent,
                           foregroundColor: Colors.black,
-                          minimumSize: const Size(140, 40),
+                          minimumSize: const Size(175, 42),
                         ),
                         onPressed: () async {
                           await Navigator.of(context).push(
@@ -347,12 +667,41 @@ class _HotelsScreenState extends State<HotelsScreen> {
                           _loadData();
                         },
                         icon: const Icon(Icons.qr_code_rounded, size: 18),
+                        label: const Text('Llave QR & FAAC'),
+                      ),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(145, 42),
+                          side: BorderSide(
+                            color: AppTheme.gold.withValues(alpha: 0.45),
+                          ),
+                        ),
+                        onPressed: () async {
+                          await Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => QrStayScreen(
+                                api: widget.api,
+                                reservationId: activeStay.id,
+                                openRoomServiceOnStart: true,
+                              ),
+                            ),
+                          );
+                          _loadData();
+                        },
+                        icon: const Icon(
+                          Icons.room_service_outlined,
+                          size: 18,
+                          color: AppTheme.gold,
+                        ),
                         label: const Text(
-                          'Abrir mi Llave QR',
-                          style: TextStyle(fontWeight: FontWeight.bold),
+                          'Room Service',
+                          style: TextStyle(color: AppTheme.gold),
                         ),
                       ),
                       OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(125, 42),
+                        ),
                         onPressed: () async {
                           await Navigator.of(context).push(
                             MaterialPageRoute(
@@ -367,14 +716,14 @@ class _HotelsScreenState extends State<HotelsScreen> {
                           _loadData();
                         },
                         icon: const Icon(Icons.more_time_rounded, size: 18),
-                        label: const Text('+ Extender Horas'),
+                        label: const Text('+ Extender'),
                       ),
                     ],
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
           ],
           if (pendingStay != null) ...[
             Card(
@@ -385,12 +734,12 @@ class _HotelsScreenState extends State<HotelsScreen> {
                 ),
                 title: Text(
                   pendingStay.isExtension
-                      ? 'Extensión pendiente de pago · Hab. ${pendingStay.room.name}'
-                      : 'Reserva pendiente de pago · Hab. ${pendingStay.room.name}',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+                      ? 'Extensión pendiente · Hab. ${pendingStay.room.name}'
+                      : 'Reserva con tasa bloqueada · Hab. ${pendingStay.room.name}',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 subtitle: Text(
-                  'Bs. ${pendingStay.payment?['amountVes'] ?? pendingStay.totalAmount} · Toca para continuar',
+                  'Bs. ${pendingStay.payment?['amountVes'] ?? pendingStay.totalAmount} · Toca para abrir Pago Móvil',
                   style: const TextStyle(fontSize: 12.5),
                 ),
                 trailing: const Icon(Icons.chevron_right_rounded),
@@ -411,180 +760,329 @@ class _HotelsScreenState extends State<HotelsScreen> {
                 },
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
           ],
           if (paymentProfile != null)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.verified_user_rounded,
-                      color: AppTheme.accent,
-                      size: 26,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Pago Móvil Frecuente Verificado',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: AppTheme.accent,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            '${paymentProfile.bankName ?? paymentProfile.bankCode} · Cédula ${paymentProfile.cedulaMasked} · Tlf ${paymentProfile.phoneMasked}',
-                            style: const TextStyle(
-                              fontSize: 12.5,
-                              color: AppTheme.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Editar cuenta frecuente',
-                      onPressed: _openEditPaymentProfileDialog,
-                      icon: const Icon(Icons.edit_outlined, size: 20),
-                    ),
-                  ],
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppTheme.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.07),
                 ),
               ),
-            ),
-          const SizedBox(height: 12),
-          for (final hotel in _hotels) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  Text(
-                    hotel.name,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
+                  const Icon(
+                    Icons.verified_user_rounded,
+                    color: AppTheme.accent,
+                    size: 22,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Billetera Cero-Clics Activa (BDV)',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            color: AppTheme.accent,
+                          ),
+                        ),
+                        Text(
+                          '${paymentProfile.bankName ?? paymentProfile.bankCode} · CI ${paymentProfile.cedulaMasked} · ${paymentProfile.phoneMasked}',
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${hotel.address} · ${hotel.city}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: AppTheme.textSecondary,
-                    ),
+                  TextButton(
+                    onPressed: _openEditPaymentProfileDialog,
+                    child: const Text('Cambiar'),
                   ),
                 ],
               ),
             ),
-            for (final room in hotel.rooms)
-              Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Habitación ${room.name} (${room.type})',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
+          const SizedBox(height: 16),
+          for (final hotel in _hotels) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _maskLabel(
+                            hotel.name,
+                            fallback: 'Establecimiento Boutique •••',
                           ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: room.isAvailable
-                                  ? AppTheme.accent.withValues(alpha: 0.15)
-                                  : AppTheme.warning.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              room.isAvailable ? 'Disponible' : 'Ocupada',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: room.isAvailable
-                                    ? AppTheme.accent
-                                    : AppTheme.warning,
-                              ),
-                            ),
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: room.amenities
-                            .map(
-                              (a) => Chip(
-                                label: Text(
-                                  a,
-                                  style: const TextStyle(fontSize: 11.5),
-                                ),
-                                visualDensity: VisualDensity.compact,
-                              ),
-                            )
-                            .toList(),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            '\$${room.pricePerHour.toStringAsFixed(0)} / hora  ·  \$${room.pricePerNight.toStringAsFixed(0)} / noche',
-                            style: const TextStyle(
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.textPrimary,
-                            ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _maskLabel(
+                            '${hotel.address} · ${hotel.city}',
+                            fallback: 'Ubicación protegida en pantalla',
                           ),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              minimumSize: const Size(130, 42),
-                            ),
-                            onPressed: room.isAvailable
-                                ? () async {
-                                    await Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => BookingPaymentScreen(
-                                          api: widget.api,
-                                          hotel: hotel,
-                                          room: room,
-                                        ),
-                                      ),
-                                    );
-                                    _loadData();
-                                  }
-                                : null,
-                            child: const Text('Reservar'),
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            color: AppTheme.textSecondary,
                           ),
-                        ],
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                  if (hotel.faacEnabled)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppTheme.cyan.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: AppTheme.cyan.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.directions_car_filled_outlined,
+                            size: 14,
+                            color: AppTheme.cyan,
+                          ),
+                          SizedBox(width: 5),
+                          Text(
+                            'Barrera FAAC QR',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.cyan,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
+            ),
+            const SizedBox(height: 6),
+            for (final room in hotel.rooms) _buildBoutiqueRoomCard(hotel, room),
           ],
         ],
       ),
     );
   }
 
-  Widget _buildMyStaysTab() {
-    if (_myReservations.isEmpty) {
+  Widget _buildBoutiqueRoomCard(HotelModel hotel, RoomModel room) {
+    final tierAccent = AppTheme.roomTierAccent(room.type);
+    final isCleaning = room.status == 'CLEANING';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: room.isAvailable
+              ? tierAccent.withValues(alpha: 0.28)
+              : Colors.white.withValues(alpha: 0.06),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            decoration: BoxDecoration(
+              gradient: AppTheme.roomTierGradient(room.type),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      AppTheme.roomTierLabel(room.type).toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.0,
+                        color: tierAccent,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _maskLabel(
+                        'Suite ${room.name}',
+                        fallback: 'Suite Privada •••',
+                      ),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 11,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: (room.isAvailable
+                            ? AppTheme.accent
+                            : isCleaning
+                                ? AppTheme.cyan
+                                : AppTheme.warning)
+                        .withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    room.isAvailable
+                        ? 'Disponible Ahora'
+                        : isCleaning
+                            ? 'Acondicionando'
+                            : 'Ocupada',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: room.isAvailable
+                          ? AppTheme.accent
+                          : isCleaning
+                              ? AppTheme.cyan
+                              : AppTheme.warning,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 7,
+                  runSpacing: 7,
+                  children: [
+                    _miniTag(Icons.directions_car_outlined, 'Garaje / FAAC'),
+                    _miniTag(Icons.room_service_outlined, 'Pasaplatos'),
+                    ...room.amenities.map((a) => _miniTag(Icons.star_outline, a)),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.baseline,
+                          textBaseline: TextBaseline.alphabetic,
+                          children: [
+                            Text(
+                              '\$${room.pricePerHour.toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.gold,
+                              ),
+                            ),
+                            const Text(
+                              ' / hora',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                color: AppTheme.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          'Amanecida 24h: \$${room.pricePerNight.toStringAsFixed(0)} USD',
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size(148, 44),
+                      ),
+                      onPressed: room.isAvailable
+                          ? () async {
+                              await Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => BookingPaymentScreen(
+                                    api: widget.api,
+                                    hotel: hotel,
+                                    room: room,
+                                  ),
+                                ),
+                              );
+                              _loadData();
+                            }
+                          : null,
+                      icon: const Icon(Icons.qr_code_rounded, size: 17),
+                      label: const Text('Reservar'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniTag(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: AppTheme.textSecondary),
+          const SizedBox(width: 4),
+          Text(
+            text,
+            style: const TextStyle(
+              fontSize: 11.5,
+              color: AppTheme.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMyStaysTab(List<GuestReservationSummary> stays) {
+    if (stays.isEmpty) {
       return const Center(
         child: Text(
           'Aún no tienes estadías registradas.',
@@ -597,9 +1095,9 @@ class _HotelsScreenState extends State<HotelsScreen> {
       onRefresh: _loadData,
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
-        itemCount: _myReservations.length,
+        itemCount: stays.length,
         itemBuilder: (context, idx) {
-          final r = _myReservations[idx];
+          final r = stays[idx];
           return Card(
             margin: const EdgeInsets.only(bottom: 12),
             child: ListTile(
@@ -612,7 +1110,7 @@ class _HotelsScreenState extends State<HotelsScreen> {
                         ? AppTheme.accent
                         : r.isAwaitingPayment
                             ? AppTheme.warning
-                            : AppTheme.primary)
+                            : AppTheme.gold)
                     .withValues(alpha: 0.16),
                 child: Icon(
                   r.isActive
@@ -624,11 +1122,14 @@ class _HotelsScreenState extends State<HotelsScreen> {
                       ? AppTheme.accent
                       : r.isAwaitingPayment
                           ? AppTheme.warning
-                          : AppTheme.primary,
+                          : AppTheme.gold,
                 ),
               ),
               title: Text(
-                '${r.hotel.name} · Habitación ${r.room.name}',
+                _maskLabel(
+                  '${r.hotel.name} · Suite ${r.room.name}',
+                  fallback: 'Suite Reservada •••',
+                ),
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               subtitle: Text(
@@ -644,7 +1145,7 @@ class _HotelsScreenState extends State<HotelsScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.accent,
                         foregroundColor: Colors.black,
-                        minimumSize: const Size(90, 36),
+                        minimumSize: const Size(94, 38),
                       ),
                       onPressed: () async {
                         await Navigator.of(context).push(
@@ -657,10 +1158,13 @@ class _HotelsScreenState extends State<HotelsScreen> {
                         );
                         _loadData();
                       },
-                      child: const Text('Ver QR'),
+                      child: const Text('Abrir QR'),
                     )
                   : r.isAwaitingPayment
                       ? OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size(86, 38),
+                          ),
                           onPressed: () async {
                             final resumable = r.toResumableReservation();
                             if (resumable == null) return;

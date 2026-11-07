@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'core/owner_api.dart';
 import 'core/owner_theme.dart';
+import 'screens/cleaning_board_screen.dart';
 import 'screens/owner_dashboard_screen.dart';
 import 'screens/owner_login_screen.dart';
 
@@ -33,26 +34,33 @@ class _OwnerPanelAppState extends State<OwnerPanelApp> {
     }
   }
 
+  Future<void> _handleLogout() async {
+    await _api.logout();
+    if (mounted) {
+      setState(() => _authenticated = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'StayPass · Panel del Propietario',
       debugShowCheckedModeBanner: false,
       theme: OwnerTheme.theme,
-      home: _authenticated
-          ? OwnerDashboardScreen(
-              api: _api,
-              onLogout: () async {
-                await _api.logout();
-                if (mounted) {
-                  setState(() => _authenticated = false);
-                }
-              },
-            )
-          : OwnerLoginScreen(
+      home: !_authenticated
+          ? OwnerLoginScreen(
               api: _api,
               onAuthenticated: () => setState(() => _authenticated = true),
-            ),
+            )
+          : _api.isCleaningRole
+              ? CleaningBoardScreen(
+                  api: _api,
+                  onLogout: _handleLogout,
+                )
+              : OwnerDashboardScreen(
+                  api: _api,
+                  onLogout: _handleLogout,
+                ),
     );
   }
 }

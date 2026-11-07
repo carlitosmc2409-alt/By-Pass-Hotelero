@@ -3,17 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>StayPass IoT · Terminal Lector QR de Puerta y Garaje</title>
+  <title>StayPass IoT · Tótem QR Barrera Vehicular FAAC y Cerraduras</title>
   <style>
     :root {
-      --bg: #070b14;
-      --surface: #101829;
-      --card: #162138;
+      --bg: #07080d;
+      --surface: #10131e;
+      --card: #151927;
       --border: rgba(255, 255, 255, 0.09);
-      --primary: #3b82f6;
-      --cyan: #06b6d4;
+      --gold: #e5b869;
+      --cyan: #38bdf8;
       --ok: #10b981;
-      --err: #ef4444;
+      --err: #f43f5e;
       --warn: #f59e0b;
       --text: #f8fafc;
       --muted: #94a3b8;
@@ -21,70 +21,71 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: radial-gradient(circle at top, #111c35 0%, var(--bg) 65%);
+      background: radial-gradient(circle at top, #1b1712 0%, #0b0e18 45%, var(--bg) 100%);
       color: var(--text);
       min-height: 100vh;
-      padding: 24px;
-    }
-    .layout {
-      max-width: 1080px;
-      margin: 0 auto;
-      display: grid;
-      grid-template-columns: 1fr 1.1fr;
-      gap: 22px;
-    }
-    @media (max-width: 860px) {
-      .layout { grid-template-columns: 1fr; }
+      padding: 22px;
     }
     .header {
-      max-width: 1080px;
+      max-width: 1160px;
       margin: 0 auto 20px auto;
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 14px;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 16px 20px;
+      border-radius: 18px;
+      padding: 16px 22px;
     }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
+    .brand { display: flex; align-items: center; gap: 12px; }
     .brand-dot {
-      width: 14px;
-      height: 14px;
+      width: 13px;
+      height: 13px;
       border-radius: 50%;
-      background: var(--cyan);
-      box-shadow: 0 0 12px var(--cyan);
+      background: var(--ok);
+      box-shadow: 0 0 12px var(--ok);
     }
-    .brand h1 { font-size: 18px; font-weight: 700; }
+    .brand h1 { font-size: 18px; font-weight: 800; letter-spacing: 0.2px; }
     .brand p { font-size: 12px; color: var(--muted); }
-    .api-bar {
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    .sse-pill {
+      font-size: 11px;
+      font-weight: 800;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.14);
+      color: var(--ok);
+      border: 1px solid rgba(16, 185, 129, 0.35);
     }
+    .api-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     input, select, textarea {
       background: var(--bg);
       color: var(--text);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 11px;
       padding: 10px 12px;
       font-size: 13px;
       width: 100%;
     }
     input:focus, select:focus, textarea:focus {
       outline: none;
-      border-color: var(--primary);
+      border-color: var(--gold);
+    }
+    .layout {
+      max-width: 1160px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1.08fr 1fr;
+      gap: 22px;
+    }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
     }
     .card {
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 18px;
+      border-radius: 22px;
       padding: 22px;
     }
     .terminal {
@@ -92,89 +93,168 @@
       flex-direction: column;
       align-items: center;
       text-align: center;
-      justify-content: center;
-      min-height: 430px;
+      justify-content: space-between;
+      min-height: 510px;
+    }
+
+    /* Escena física Barrera Vehicular FAAC 615 / B680H */
+    .faac-stage {
+      width: 100%;
+      height: 195px;
+      background: linear-gradient(180deg, #0b101d 0%, #111827 78%, #1e293b 100%);
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      border-radius: 18px;
       position: relative;
       overflow: hidden;
+      margin: 10px 0 18px 0;
     }
-    .led-ring {
-      width: 176px;
-      height: 176px;
+    .road-line {
+      position: absolute;
+      bottom: 12px;
+      left: 16px;
+      right: 16px;
+      height: 2px;
+      border-bottom: 2px dashed rgba(255, 255, 255, 0.22);
+    }
+    .traffic-light {
+      position: absolute;
+      top: 16px;
+      right: 18px;
+      background: #090c14;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 7px 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .bulb {
+      width: 12px;
+      height: 12px;
       border-radius: 50%;
+      background: #334155;
+    }
+    .bulb.red.on { background: var(--err); box-shadow: 0 0 12px var(--err); }
+    .bulb.green.on { background: var(--ok); box-shadow: 0 0 14px var(--ok); }
+
+    .faac-cabinet {
+      position: absolute;
+      bottom: 18px;
+      left: 42px;
+      width: 48px;
+      height: 96px;
+      background: linear-gradient(180deg, #ea580c 0%, #c2410c 70%, #1f2937 70%);
+      border: 2px solid rgba(255, 255, 255, 0.22);
+      border-radius: 8px 8px 3px 3px;
+      z-index: 3;
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      border: 5px solid var(--cyan);
-      box-shadow: 0 0 38px rgba(6, 182, 212, 0.35), inset 0 0 24px rgba(6, 182, 212, 0.2);
-      transition: all 0.25s ease;
-      margin-bottom: 22px;
+      padding-top: 10px;
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 0.8px;
+      color: #fff;
     }
-    .led-ring.granted {
-      border-color: var(--ok);
-      box-shadow: 0 0 55px rgba(16, 185, 129, 0.65), inset 0 0 30px rgba(16, 185, 129, 0.35);
-      transform: scale(1.04);
+    .faac-pivot {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #0f172a;
+      border: 2px solid var(--gold);
+      margin-top: 8px;
     }
-    .led-ring.denied {
-      border-color: var(--err);
-      box-shadow: 0 0 55px rgba(239, 68, 68, 0.65), inset 0 0 30px rgba(239, 68, 68, 0.35);
-      animation: shake 0.35s ease;
+    .faac-arm {
+      position: absolute;
+      bottom: 84px;
+      left: 72px;
+      width: 280px;
+      height: 14px;
+      border-radius: 0 8px 8px 0;
+      background: repeating-linear-gradient(
+        -45deg,
+        #f8fafc,
+        #f8fafc 16px,
+        #ef4444 16px,
+        #ef4444 32px
+      );
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+      transform-origin: 6px 50%;
+      transform: rotate(0deg);
+      transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+      z-index: 2;
     }
-    @keyframes shake {
-      0%, 100% { transform: translateX(0); }
-      25% { transform: translateX(-8px); }
-      75% { transform: translateX(8px); }
+    .faac-arm.open {
+      transform: rotate(-80deg);
     }
-    .led-icon { font-size: 54px; line-height: 1; }
-    .led-sub { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 8px; color: var(--muted); }
-    .status-title { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
-    .status-msg { font-size: 14px; color: var(--muted); max-width: 360px; line-height: 1.45; }
+    .faac-arm::after {
+      content: '';
+      position: absolute;
+      right: 6px;
+      top: 3px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 10px var(--cyan);
+    }
+    .dry-contact-badge {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      font-family: monospace;
+      font-size: 11px;
+      padding: 5px 9px;
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid var(--border);
+      color: var(--cyan);
+    }
+
+    .status-title { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+    .status-msg { font-size: 13.5px; color: var(--muted); max-width: 420px; line-height: 1.45; }
     .meta-pills {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       justify-content: center;
-      margin-top: 16px;
+      margin-top: 14px;
     }
     .pill {
-      font-size: 12px;
+      font-size: 11.5px;
       padding: 5px 11px;
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.06);
       border: 1px solid var(--border);
     }
     .relay-bar {
-      margin-top: 18px;
+      margin-top: 14px;
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 700;
       color: var(--ok);
       min-height: 20px;
     }
     .section-title {
-      font-size: 14px;
+      font-size: 13.5px;
       font-weight: 700;
       margin-bottom: 10px;
-      color: var(--text);
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
-    .btn-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 12px;
-    }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
     button {
       cursor: pointer;
       border: none;
-      border-radius: 10px;
+      border-radius: 11px;
       padding: 11px 15px;
       font-size: 13px;
-      font-weight: 600;
-      color: #fff;
-      background: var(--primary);
-      transition: opacity 0.15s ease;
+      font-weight: 700;
+      color: #090a0f;
+      background: var(--gold);
+      transition: opacity 0.15s ease, transform 0.1s ease;
     }
     button:hover { opacity: 0.92; }
     button.secondary {
@@ -182,10 +262,11 @@
       border: 1px solid var(--border);
       color: var(--text);
     }
-    button.emerald { background: var(--ok); }
+    button.emerald { background: var(--ok); color: #04130d; }
+    button.cyan { background: var(--cyan); color: #04121d; }
     video {
       width: 100%;
-      max-height: 210px;
+      max-height: 200px;
       border-radius: 12px;
       background: #000;
       margin-top: 10px;
@@ -194,7 +275,7 @@
     }
     .log-list {
       margin-top: 10px;
-      max-height: 210px;
+      max-height: 215px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
@@ -203,7 +284,7 @@
     .log-item {
       font-size: 12px;
       padding: 9px 12px;
-      border-radius: 9px;
+      border-radius: 10px;
       background: var(--surface);
       border-left: 3px solid var(--cyan);
       display: flex;
@@ -219,68 +300,82 @@
     <div class="brand">
       <div class="brand-dot"></div>
       <div>
-        <h1>StayPass IoT · Simulador de Lector QR (Garaje y Cerraduras)</h1>
-        <p>Valida firmas HMAC-SHA256 en tiempo real contra el backend sin revelar identidad del huésped</p>
+        <h1>StayPass IoT · Tótem QR Barrera Vehicular FAAC y Cerraduras</h1>
+        <p>Contacto seco OPEN-A + GND · Validación criptográfica HMAC-SHA256 + Escucha SSE en vivo</p>
       </div>
+      <span id="sseStatus" class="sse-pill">● CONECTANDO SSE</span>
     </div>
     <div class="api-bar">
-      <input id="apiBase" value="http://localhost:3000/api/v1" style="width: 250px;" title="API Backend URL" />
-      <button class="secondary" onclick="loadHotelRooms()">Sincronizar Puertas</button>
+      <input id="apiBase" value="http://localhost:3000/api/v1" style="width: 245px;" title="API Backend URL" />
+      <button class="secondary" onclick="loadHotelRooms()">Sincronizar Hardware</button>
     </div>
   </header>
 
   <main class="layout">
-    <!-- Panel Izquierdo: Hardware Físico Simulado -->
+    <!-- Panel Izquierdo: Tótem FAAC + Semáforo + Brazo Físico Animado -->
     <section class="card terminal">
-      <div style="width: 100%; margin-bottom: 18px; text-align: left;">
-        <label class="section-title" for="deviceSelect">Punto de Acceso Físico (Device ID)</label>
+      <div style="width: 100%; text-align: left;">
+        <label class="section-title" for="deviceSelect">
+          <span>Punto de Control Físico (Tótem FAAC o Cerradura IoT)</span>
+          <span style="color: var(--cyan); font-size: 11.5px;">FAAC 615 / E615 / B680H</span>
+        </label>
         <select id="deviceSelect">
-          <option value="garaje-principal">🚗 Barrera Vehicular Principal (garaje-principal)</option>
-          <option value="lock-101">🚪 Cerradura Habitación 101 (lock-101)</option>
-          <option value="lock-102">🚪 Cerradura Habitación 102 (lock-102)</option>
-          <option value="lock-suite-a">🚪 Cerradura Suite A (lock-suite-a)</option>
+          <option value="faac-entrada-1">🚗 Barrera Vehicular FAAC Entrada (faac-entrada-1)</option>
+          <option value="faac-salida-1">🚙 Barrera Vehicular FAAC Salida +15m Gracia (faac-salida-1)</option>
+          <option value="lock-101">🚪 Cerradura Electrónica Suite 101 (lock-101)</option>
         </select>
       </div>
 
-      <div id="ledRing" class="led-ring">
-        <div id="ledIcon" class="led-icon">📡</div>
-        <div id="ledSub" class="led-sub">EN ESPERA</div>
+      <div class="faac-stage">
+        <div id="contactReadout" class="dry-contact-badge">BORNERA J5: OPEN-A [NO · ABIERTO]</div>
+        <div class="traffic-light">
+          <div id="bulbRed" class="bulb red on"></div>
+          <div id="bulbGreen" class="bulb green"></div>
+          <span id="semLabel">ALTO</span>
+        </div>
+        <div class="faac-cabinet">
+          <span>FAAC</span>
+          <div class="faac-pivot"></div>
+        </div>
+        <div id="faacArm" class="faac-arm"></div>
+        <div class="road-line"></div>
       </div>
 
-      <div id="statusTitle" class="status-title">Acerque su Código QR</div>
-      <div id="statusMsg" class="status-msg">
-        Presente la llave digital QR generada en la App del Huésped tras el cobro automático Pago Móvil BDV.
+      <div>
+        <div id="statusTitle" class="status-title">Acerque su Código QR al Tótem</div>
+        <div id="statusMsg" class="status-msg">
+          Presente el QR de la App del Huésped (active "Modo Tótem FAAC" para alto brillo) o accione la apertura remota desde el vehículo o Panel del Propietario.
+        </div>
+        <div id="metaPills" class="meta-pills"></div>
+        <div id="relayBar" class="relay-bar"></div>
       </div>
-
-      <div id="metaPills" class="meta-pills"></div>
-      <div id="relayBar" class="relay-bar"></div>
     </section>
 
-    <!-- Panel Derecho: Entrada de QR (Portapapeles / Cámara / Imagen) + Bitácora -->
+    <!-- Panel Derecho: Lector QR + Cámara + Bitácora -->
     <section style="display: flex; flex-direction: column; gap: 18px;">
       <div class="card">
         <div class="section-title">
-          <span>1. Presentar Llave QR al Lector</span>
+          <span>1. Escanear Token QR en Tótem / Cerradura</span>
           <span style="font-size: 11px; color: var(--muted); font-weight: 400;">POST /access/validate</span>
         </div>
-        <textarea id="tokenInput" rows="3" placeholder="Pega aquí el rawToken copiado desde la App del Huésped (ej: uuid:nonce:timestamp:hmac)..."></textarea>
+        <textarea id="tokenInput" rows="3" placeholder="Pega aquí el rawToken copiado desde la App del Huésped (uuid:nonce:timestamp:hmac)..."></textarea>
         <div class="btn-row">
-          <button class="emerald" onclick="pasteAndScan()">📋 Pegar del Portapapeles y Escanear</button>
-          <button onclick="scanTokenFromInput()">⚡ Validar Token en Lector</button>
-          <button class="secondary" onclick="testTamperedToken()">🛡️ Simular QR Falsificado</button>
+          <button class="emerald" onclick="pasteAndScan()">📋 Pegar QR y Abrir</button>
+          <button class="cyan" onclick="scanTokenFromInput()">⚡ Validar en Tótem</button>
+          <button class="secondary" onclick="testTamperedToken()">🛡️ Simular QR Adulterado</button>
         </div>
 
         <hr style="border: none; border-top: 1px solid var(--border); margin: 16px 0;" />
 
         <div class="section-title">
-          <span>2. Escaneo Óptico (Cámara Web o Captura PNG del QR)</span>
+          <span>2. Lector Óptico (Cámara Web o Imagen PNG del QR)</span>
         </div>
         <div class="btn-row">
-          <button class="secondary" id="camBtn" onclick="toggleCamera()">📷 Activar Cámara QR</button>
+          <button class="secondary" id="camBtn" onclick="toggleCamera()">📷 Activar Cámara del Tótem</button>
           <label style="display: inline-flex; align-items: center;">
             <input type="file" id="qrFile" accept="image/*" style="display: none;" onchange="decodeQrImage(event)" />
-            <span style="cursor: pointer; border-radius: 10px; padding: 11px 15px; font-size: 13px; font-weight: 600; background: var(--surface); border: 1px solid var(--border);">
-              🖼️ Subir Imagen QR
+            <span style="cursor: pointer; border-radius: 11px; padding: 11px 15px; font-size: 13px; font-weight: 700; background: var(--surface); border: 1px solid var(--border);">
+              🖼️ Escanear Captura QR
             </span>
           </label>
         </div>
@@ -289,13 +384,13 @@
 
       <div class="card">
         <div class="section-title">
-          <span>Bitácora del Controlador de Acceso</span>
+          <span>Bitácora en Vivo (QR + Pulsos Remotos SSE)</span>
           <button class="secondary" style="padding: 4px 10px; font-size: 11px;" onclick="clearLog()">Limpiar</button>
         </div>
         <div id="logList" class="log-list">
           <div class="log-item">
-            <span>Terminal inicializada y lista para lectura QR.</span>
-            <span style="color: var(--muted);">Sistema OK</span>
+            <span>Controladora FAAC inicializada · Escuchando QR y pulsos remotos SSE.</span>
+            <span style="color: var(--muted);">OK</span>
           </div>
         </div>
       </div>
@@ -306,6 +401,8 @@
     let relayTimer = null;
     let mediaStream = null;
     let scanLoopActive = false;
+    let currentHotelId = null;
+    let sseSource = null;
 
     function playTone(granted) {
       try {
@@ -352,6 +449,49 @@
       document.getElementById('logList').innerHTML = '';
     }
 
+    function connectKioskSse(hotelId) {
+      if (!hotelId) return;
+      if (sseSource) {
+        sseSource.close();
+        sseSource = null;
+      }
+      const base = document.getElementById('apiBase').value.trim().replace(/\/$/, '');
+      const pill = document.getElementById('sseStatus');
+      try {
+        sseSource = new EventSource(`${base}/events/stream?hotelId=${encodeURIComponent(hotelId)}&scope=kiosk`);
+        sseSource.onmessage = (ev) => {
+          try {
+            const payload = JSON.parse(ev.data);
+            if (payload.type === 'CONNECTED') {
+              pill.textContent = '● SSE KIOSCO EN VIVO';
+              return;
+            }
+            if (payload.type === 'FAAC_BARRIER_PULSE') {
+              const dirLabel = payload.direction === 'EXIT' ? 'SALIDA' : 'ENTRADA';
+              playTone(true);
+              renderTerminalState({
+                state: 'granted',
+                title: `¡Barrera FAAC (${dirLabel}) Levantada!`,
+                message: `Pulso seco ${payload.contactType || 'OPEN-A + GND'} (${payload.pulseDurationMs || 1000}ms) recibido en tiempo real (${payload.triggeredBy || 'REMOTO'}).`,
+                pills: [
+                  `Modelo: ${payload.model || 'FAAC 615'}`,
+                  `Tótem: ${payload.deviceId || 'faac'}`,
+                  payload.roomName ? `Suite: ${payload.roomName}` : 'Mando Ejecutivo',
+                ],
+                pulseMs: payload.pulseDurationMs || 1000,
+              });
+              appendLog(true, `Pulso FAAC ${dirLabel} (${payload.triggeredBy || 'SSE'})`, payload.deviceId || 'FAAC');
+            } else if (payload.type === 'DOOR_UNLOCK_PULSE') {
+              appendLog(true, `Cerradura Suite ${payload.roomName} abierta`, payload.deviceId || 'LOCK');
+            }
+          } catch (_) {}
+        };
+        sseSource.onerror = () => {
+          pill.textContent = '● RECONECTANDO SSE...';
+        };
+      } catch (_) {}
+    }
+
     async function loadHotelRooms() {
       const base = document.getElementById('apiBase').value.trim().replace(/\/$/, '');
       try {
@@ -359,30 +499,42 @@
         const json = await res.json();
         const firstHotel = json.data && json.data[0];
         if (!firstHotel) return;
+        currentHotelId = firstHotel.id;
+        connectKioskSse(currentHotelId);
+
         const detRes = await fetch(`${base}/hotels/${firstHotel.id}`);
         const detail = await detRes.json();
+        const faac = detail.faac || {};
+        const entryId = faac.entryDeviceId || 'faac-entrada-1';
+        const exitId = faac.exitDeviceId || 'faac-salida-1';
+
         const select = document.getElementById('deviceSelect');
         const current = select.value;
-        select.innerHTML = `<option value="garaje-principal">🚗 Barrera Vehicular Principal · ${detail.name} (garaje-principal)</option>`;
+        select.innerHTML = `
+          <option value="${entryId}">🚗 Barrera Vehicular FAAC Entrada · ${detail.name} (${entryId})</option>
+          <option value="${exitId}">🚙 Barrera Vehicular FAAC Salida +15m Gracia (${exitId})</option>
+        `;
         (detail.rooms || []).forEach(r => {
           const lockId = 'lock-' + String(r.name).trim().toLowerCase().replace(/\s+/g, '-');
           const opt = document.createElement('option');
           opt.value = lockId;
-          opt.textContent = `🚪 Cerradura Habitación ${r.name} (${lockId}) · [${r.status}]`;
+          opt.textContent = `🚪 Cerradura Suite ${r.name} (${lockId}) · [${r.status}]`;
           select.appendChild(opt);
         });
         if ([...select.options].some(o => o.value === current)) {
           select.value = current;
         }
       } catch (e) {
-        appendLog(false, 'No se pudo sincronizar catálogo de puertas: ' + e.message, 'sistema');
+        appendLog(false, 'No se pudo sincronizar catálogo IoT: ' + e.message, 'sistema');
       }
     }
 
-    function renderTerminalState({ state, title, message, pills = [] }) {
-      const ring = document.getElementById('ledRing');
-      const icon = document.getElementById('ledIcon');
-      const sub = document.getElementById('ledSub');
+    function renderTerminalState({ state, title, message, pills = [], pulseMs = 1000 }) {
+      const arm = document.getElementById('faacArm');
+      const red = document.getElementById('bulbRed');
+      const green = document.getElementById('bulbGreen');
+      const semLabel = document.getElementById('semLabel');
+      const readout = document.getElementById('contactReadout');
       const stTitle = document.getElementById('statusTitle');
       const stMsg = document.getElementById('statusMsg');
       const meta = document.getElementById('metaPills');
@@ -391,31 +543,43 @@
       clearInterval(relayTimer);
       relay.textContent = '';
 
-      ring.className = 'led-ring' + (state === 'granted' ? ' granted' : state === 'denied' ? ' denied' : '');
       if (state === 'granted') {
-        icon.textContent = '🔓';
-        sub.textContent = 'ABIERTO';
-        let secs = 5;
-        relay.textContent = `⚡ Relé electromagnético activado · Cerrando en ${secs}s...`;
+        arm.classList.add('open');
+        red.classList.remove('on');
+        green.classList.add('on');
+        semLabel.textContent = 'PASE';
+        semLabel.style.color = 'var(--ok)';
+        readout.textContent = `BORNERA J5: OPEN-A + GND [PULSO ${pulseMs}ms CERRADO]`;
+
+        let secs = 6;
+        relay.textContent = `🟢 Paso vehicular habilitado · Fotocélula FAAC activa (${secs}s)...`;
         relayTimer = setInterval(() => {
           secs -= 1;
           if (secs <= 0) {
             clearInterval(relayTimer);
             renderTerminalState({
               state: 'idle',
-              title: 'Acerque su Código QR',
-              message: 'Puerta asegurada nuevamente. Lista para el próximo escaneo.',
+              title: 'Acerque su Código QR al Tótem',
+              message: 'Barrera FAAC descendida y asegurada tras cruce vehicular.',
             });
           } else {
-            relay.textContent = `⚡ Relé electromagnético activado · Cerrando en ${secs}s...`;
+            relay.textContent = `🟢 Paso vehicular habilitado · Fotocélula FAAC activa (${secs}s)...`;
           }
         }, 1000);
       } else if (state === 'denied') {
-        icon.textContent = '🔒';
-        sub.textContent = 'BLOQUEADO';
+        arm.classList.remove('open');
+        red.classList.add('on');
+        green.classList.remove('on');
+        semLabel.textContent = 'BLOQUEADO';
+        semLabel.style.color = 'var(--err)';
+        readout.textContent = 'BORNERA J5: OPEN-A [BLOQUEADO]';
       } else {
-        icon.textContent = '📡';
-        sub.textContent = 'EN ESPERA';
+        arm.classList.remove('open');
+        red.classList.add('on');
+        green.classList.remove('on');
+        semLabel.textContent = 'ALTO';
+        semLabel.style.color = 'var(--text)';
+        readout.textContent = 'BORNERA J5: OPEN-A [NO · ABIERTO]';
       }
 
       stTitle.textContent = title;
@@ -433,7 +597,7 @@
         renderTerminalState({
           state: 'denied',
           title: 'Lectura Vacía',
-          message: 'Pega o escanea un token QR válido de al menos 10 caracteres.',
+          message: 'Pegue o escanee un token QR válido de al menos 10 caracteres.',
         });
         return;
       }
@@ -448,27 +612,30 @@
 
         if (res.ok && data.allowed) {
           playTone(true);
-          const until = data.validUntil ? new Date(data.validUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/D';
+          const until = data.validUntil
+            ? new Date(data.validUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : 'N/D';
+          const isFaac = data.accessZone === 'FAAC_ENTRY' || data.accessZone === 'FAAC_EXIT' || data.accessZone === 'GARAGE_GATE';
           renderTerminalState({
             state: 'granted',
-            title: data.accessZone === 'GARAGE_GATE' ? '¡Barrera Abierta!' : `¡Bienvenido · Hab. ${data.roomName}!`,
+            title: isFaac ? '¡Barrera FAAC Abierta!' : `¡Puerta Desbloqueada · Suite ${data.roomName}!`,
             message: data.message,
+            pulseMs: (data.faacPulse && data.faacPulse.pulseDurationMs) || 1000,
             pills: [
-              `Habitación: ${data.roomName}`,
-              `Dispositivo: ${deviceId}`,
-              `Accesos: ${data.usedCount}/${data.maxUses}`,
-              `Salida máx: ${until}`,
+              `Suite: ${data.roomName}`,
+              `Zona: ${data.accessZone}`,
+              `Usos QR: ${data.usedCount}/${data.maxUses}`,
+              `Válido: ${until}`,
             ],
           });
           appendLog(true, `${data.message} (Uso ${data.usedCount}/${data.maxUses})`, deviceId);
-          loadHotelRooms();
         } else {
           playTone(false);
           renderTerminalState({
             state: 'denied',
             title: 'Acceso Denegado',
-            message: data.message || 'El código QR fue rechazado por el controlador.',
-            pills: data.expectedRoom ? [`Tu habitación asignada: ${data.expectedRoom}`] : [`Dispositivo: ${deviceId}`],
+            message: data.message || 'El código QR fue rechazado por la controladora.',
+            pills: data.expectedRoom ? [`Suite asignada: ${data.expectedRoom}`] : [`Tótem: ${deviceId}`],
           });
           appendLog(false, data.message || 'QR rechazado', deviceId);
         }
@@ -509,7 +676,7 @@
       const file = event.target.files && event.target.files[0];
       if (!file) return;
       if (!('BarcodeDetector' in window)) {
-        appendLog(false, 'Este navegador no soporta BarcodeDetector nativo; usa el botón Pegar Token.', 'óptico');
+        appendLog(false, 'Este navegador no soporta BarcodeDetector nativo; usa Pegar QR.', 'óptico');
         return;
       }
       try {
@@ -538,12 +705,12 @@
         mediaStream.getTracks().forEach(t => t.stop());
         mediaStream = null;
         video.style.display = 'none';
-        btn.textContent = '📷 Activar Cámara QR';
+        btn.textContent = '📷 Activar Cámara del Tótem';
         return;
       }
 
       if (!('BarcodeDetector' in window)) {
-        appendLog(false, 'BarcodeDetector no disponible en este navegador; pega el token directamente.', 'cámara');
+        appendLog(false, 'BarcodeDetector no disponible en este navegador; pega el token.', 'cámara');
         return;
       }
 

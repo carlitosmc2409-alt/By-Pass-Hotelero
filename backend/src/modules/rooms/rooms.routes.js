@@ -14,6 +14,10 @@ async function roomsRoutes(fastify) {
   fastify.patch('/:id/status', {
     preHandler: [fastify.authenticate, fastify.authorizeOwner],
   }, ctrl.handleUpdateStatus)
+
+  fastify.patch('/:id/cleaning-status', {
+    preHandler: [fastify.authenticate, fastify.authorizeCleaningOrOwner],
+  }, ctrl.handleCleaningStatusUpdate)
 }
 
 module.exports = roomsRoutes

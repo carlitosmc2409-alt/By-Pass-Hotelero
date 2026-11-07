@@ -2,9 +2,31 @@ const { prisma } = require('../../config/database')
 const env = require('../../config/env')
 const { decryptField } = require('../../utils/fieldCrypto')
 const { round2 } = require('../../utils/rates')
+const { emitRealtimeEvent } = require('../../utils/eventBus')
 const { extractBdvNotificationWithAI } = require('./bdvAiExtractor')
 
 const EXTENSION_PREFIX = 'EXTENSION_OF:'
+const ROOM_SERVICE_PREFIX = 'ROOM_SERVICE_OF:'
+
+function parseRoomServiceNote(notes) {
+  if (!notes || typeof notes !== 'string' || !notes.startsWith(ROOM_SERVICE_PREFIX)) {
+    return null
+  }
+  const rest = notes.slice(ROOM_SERVICE_PREFIX.length)
+  const sepIdx = rest.indexOf('|')
+  if (sepIdx === -1) return { parentReservationId: rest, items: [], guestNote: '' }
+  const parentReservationId = rest.slice(0, sepIdx)
+  try {
+    const parsed = JSON.parse(rest.slice(sepIdx + 1))
+    return {
+      parentReservationId,
+      items: Array.isArray(parsed.items) ? parsed.items : [],
+      guestNote: parsed.guestNote || '',
+    }
+  } catch (_) {
+    return { parentReservationId, items: [], guestNote: '' }
+  }
+}
 
 function normalizeRef(ref) {
   return String(ref || '').replace(/\D/g, '')
@@ -36,7 +58,6 @@ function normalizeVePhone(raw) {
 function parseBdvNotificationText(rawText) {
   if (!rawText || typeof rawText !== 'string') return {}
 
-  // Separar cualquier segmento "Concepto:" o "Motivo:" escrito por el pagador
   let headerText = rawText
   let concept = null
   const conceptMatch = rawText.match(/\b(?:Concepto|Motivo)\s*[:.-]\s*(.+)$/i)
@@ -45,7 +66,6 @@ function parseBdvNotificationText(rawText) {
     headerText = rawText.slice(0, conceptMatch.index).trim()
   }
 
-  // Monto: "Bs. 1.500,00" o "Bs 1500.00" o "Bs.1500,50"
   let amountVes = null
   const amountMatch = headerText.match(/Bs\.?\s*([0-9.,]+)/i)
   if (amountMatch) {
@@ -57,14 +77,12 @@ function parseBdvNotificationText(rawText) {
     if (!Number.isNaN(parsed)) amountVes = round2(parsed)
   }
 
-  // Referencia: "Ref: 00987654" o "Ref 987654" o "Referencia: 12345678"
   let reference = null
   const refMatch = headerText.match(/Ref(?:erencia)?[:.\s#-]*([0-9]{4,20})/i)
   if (refMatch) {
     reference = normalizeRef(refMatch[1])
   }
 
-  // Teléfono venezolano: 0412/0414/0424/0416/0426/+58...
   let payerPhone = null
   const phoneMatch = headerText.match(/(?:\+?58|0)?\s*(4(?:12|14|24|16|26))[\s-]*([0-9]{7})/)
   if (phoneMatch) {
@@ -106,18 +124,34 @@ function verifyPayerMatchesGuest(bankEvent, guest) {
 
 /**
  * Ejecuta dentro de una transacción Prisma los efectos de un pago aprobado:
- * - Si es una reserva normal: activa la reserva y marca la habitación OCCUPIED.
- * - Si es una extensión (`EXTENSION_OF:<parentId>`): amplía `checkOut`, `durationHours`
- *   y `totalAmount` de la estadía madre, extiende el `validUntil` de su llave QR y
- *   cierra el registro auxiliar de extensión como COMPLETED.
+ * - Reserva normal: activa la reserva y marca la habitación OCCUPIED.
+ * - Extensión (`EXTENSION_OF:<parentId>`): amplía `checkOut`, `durationHours`, `totalAmount` y vigencia QR.
+ * - Room Service (`ROOM_SERVICE_OF:<parentId>|<json>`): habilita orden de entrega en esclusa/pasaplatos.
  */
 async function activateApprovedPaymentInTx(tx, { payment, reservation, confirmedBy, matchingEventId = null }) {
+  const prevMeta = (payment.metadata && typeof payment.metadata === 'object')
+    ? payment.metadata
+    : {}
+  const roomServiceInfo = parseRoomServiceNote(reservation.notes)
+
   await tx.payment.update({
     where: { id: payment.id },
     data: {
       status: 'APPROVED',
       confirmedAt: new Date(),
       confirmedBy,
+      ...(roomServiceInfo
+        ? {
+            metadata: {
+              ...prevMeta,
+              isRoomService: true,
+              parentReservationId: roomServiceInfo.parentReservationId,
+              items: roomServiceInfo.items,
+              guestNote: roomServiceInfo.guestNote,
+              deliveryStatus: 'PENDING_DELIVERY',
+            },
+          }
+        : {}),
     },
   })
 
@@ -126,6 +160,22 @@ async function activateApprovedPaymentInTx(tx, { payment, reservation, confirmed
       where: { id: matchingEventId },
       data: { matchedPaymentId: payment.id },
     })
+  }
+
+  if (roomServiceInfo) {
+    await tx.reservation.update({
+      where: { id: reservation.id },
+      data: { status: 'COMPLETED' },
+    })
+    return {
+      targetReservationId: roomServiceInfo.parentReservationId,
+      orderReservationId: reservation.id,
+      isExtension: false,
+      isRoomService: true,
+      items: roomServiceInfo.items,
+      guestNote: roomServiceInfo.guestNote,
+      newCheckOut: reservation.checkOut,
+    }
   }
 
   const isExtension = Boolean(reservation.notes && reservation.notes.startsWith(EXTENSION_PREFIX))
@@ -144,7 +194,7 @@ async function activateApprovedPaymentInTx(tx, { payment, reservation, confirmed
       data: {
         validUntil: reservation.checkOut,
         isActive: true,
-        maxUses: { increment: 6 },
+        maxUses: { increment: 10 },
       },
     })
     await tx.reservation.update({
@@ -154,6 +204,7 @@ async function activateApprovedPaymentInTx(tx, { payment, reservation, confirmed
     return {
       targetReservationId: parentId,
       isExtension: true,
+      isRoomService: false,
       newCheckOut: reservation.checkOut,
     }
   }
@@ -170,7 +221,51 @@ async function activateApprovedPaymentInTx(tx, { payment, reservation, confirmed
   return {
     targetReservationId: reservation.id,
     isExtension: false,
+    isRoomService: false,
     newCheckOut: reservation.checkOut,
+  }
+}
+
+function broadcastActivationEvents({ hotelId, guestId, roomId, roomName, paymentId, activation }) {
+  emitRealtimeEvent({
+    hotelId,
+    guestId,
+    reservationId: activation.targetReservationId,
+    type: 'PAYMENT_APPROVED',
+    payload: {
+      paymentId,
+      reservationId: activation.targetReservationId,
+      orderReservationId: activation.orderReservationId || null,
+      roomName,
+      isExtension: Boolean(activation.isExtension),
+      isRoomService: Boolean(activation.isRoomService),
+      newCheckOut: activation.newCheckOut,
+    },
+  })
+
+  if (activation.isRoomService) {
+    const orderPayload = {
+      orderId: activation.orderReservationId,
+      roomName,
+      items: activation.items || [],
+      guestNote: activation.guestNote || '',
+      deliveryStatus: 'PENDING_DELIVERY',
+    }
+    emitRealtimeEvent({
+      hotelId,
+      guestId,
+      reservationId: activation.targetReservationId,
+      type: 'ROOM_SERVICE_ORDER',
+      payload: orderPayload,
+      cleaningSafePayload: orderPayload,
+    })
+  } else if (!activation.isExtension) {
+    emitRealtimeEvent({
+      hotelId,
+      type: 'ROOM_STATUS_CHANGED',
+      payload: { roomId, roomName, status: 'OCCUPIED' },
+      cleaningSafePayload: { roomId, roomName, status: 'OCCUPIED' },
+    })
   }
 }
 
@@ -197,14 +292,18 @@ async function reconcilePayment(paymentId, options = {}) {
   }
 
   if (payment.status === 'APPROVED') {
+    const rs = parseRoomServiceNote(payment.reservation.notes)
     const targetId = payment.reservation.notes?.startsWith(EXTENSION_PREFIX)
       ? payment.reservation.notes.slice(EXTENSION_PREFIX.length)
-      : payment.reservationId
+      : rs
+        ? rs.parentReservationId
+        : payment.reservationId
     return {
       matched: true,
       status: 'APPROVED',
       alreadyApproved: true,
       reservationId: targetId,
+      isRoomService: Boolean(rs),
     }
   }
 
@@ -281,21 +380,29 @@ async function reconcilePayment(paymentId, options = {}) {
     })
   )
 
+  broadcastActivationEvents({
+    hotelId,
+    guestId: payment.reservation.guestId,
+    roomId: payment.reservation.roomId,
+    roomName: payment.reservation.room.name,
+    paymentId: payment.id,
+    activation,
+  })
+
   return {
     matched: true,
     status: 'APPROVED',
     bankEventId: matchingEvent.id,
     reservationId: activation.targetReservationId,
+    orderReservationId: activation.orderReservationId || null,
     isExtension: activation.isExtension,
+    isRoomService: activation.isRoomService,
     newCheckOut: activation.newCheckOut,
   }
 }
 
 /**
- * Registra un evento bancario entrante e intenta conciliarlo al instante:
- * 1) Por coincidencia de referencia si el huésped ya la reportó.
- * 2) En modo "Cero Clics" (sin que el huésped toque el teclado) si el monto en Bs
- *    coincide al céntimo exacto y el teléfono/cédula del push coincide con su perfil cifrado.
+ * Registra un evento bancario entrante e intenta conciliarlo al instante (con referencia o Zero-Click).
  */
 async function recordBankEvent(input) {
   const parsed = input.rawText ? parseBdvNotificationText(input.rawText) : {}
@@ -354,7 +461,6 @@ async function recordBankEvent(input) {
     },
   })
 
-  // 1) Buscar si algún pago pendiente ya reportó esta referencia
   const pendingWithRef = await prisma.payment.findMany({
     where: {
       status: { in: ['PENDING', 'PENDING_REVIEW'] },
@@ -368,8 +474,6 @@ async function recordBankEvent(input) {
   let candidatePayment = pendingWithRef.find(p => referencesMatch(p.gatewayRef, reference))
   let zeroClick = false
 
-  // 2) Conciliación "Cero Clics": el huésped aún no escribió la referencia, pero el push
-  //    del banco trae monto exacto al céntimo + teléfono/cédula verificado de su perfil.
   if (!candidatePayment && (payerPhone || payerCedula)) {
     const refAlreadyUsed = await prisma.payment.findFirst({
       where: {
@@ -407,13 +511,16 @@ async function recordBankEvent(input) {
 
       if (exactMatches.length === 1) {
         const chosen = exactMatches[0]
+        const prevMeta = (chosen.metadata && typeof chosen.metadata === 'object')
+          ? chosen.metadata
+          : {}
         await prisma.payment.update({
           where: { id: chosen.id },
           data: {
             gatewayRef: reference,
             reportedAt: new Date(),
             status: 'PENDING_REVIEW',
-            metadata: { autoReportedByZeroClick: true, bankEventId: bankEvent.id },
+            metadata: { ...prevMeta, autoReportedByZeroClick: true, bankEventId: bankEvent.id },
           },
         })
         candidatePayment = chosen
@@ -430,6 +537,18 @@ async function recordBankEvent(input) {
     }
   }
 
+  emitRealtimeEvent({
+    hotelId: input.hotelId,
+    type: 'BANK_EVENT_RECEIVED',
+    payload: {
+      bankEventId: bankEvent.id,
+      amountVes: Number(bankEvent.amountVes),
+      reference: bankEvent.reference,
+      matched: Boolean(reconciliation?.matched),
+      zeroClick,
+    },
+  })
+
   return { bankEvent, reconciliation, usedAiFallback }
 }
 
@@ -437,6 +556,7 @@ module.exports = {
   normalizeRef,
   parseBdvNotificationText,
   activateApprovedPaymentInTx,
+  broadcastActivationEvents,
   reconcilePayment,
   recordBankEvent,
 }

@@ -33,9 +33,22 @@ async function main() {
     idNumber: 'J-50123456-7',
     holderName: 'Inversiones La Brisa C.A.',
   }
+  const staffPinHash = await bcrypt.hash('1234', 10)
+  const defaultSettings = {
+    cleaningStaff: [
+      {
+        id: '00000000-0000-4000-8000-000000000901',
+        name: 'Elena Turno Nocturno',
+        alias: 'camarera1',
+        pinHash: staffPinHash,
+        active: true,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+  }
   const hotel = await prisma.hotel.upsert({
     where: { slug: 'motel-la-brisa-caracas' },
-    update: { paymentInfo },
+    update: { paymentInfo, settings: defaultSettings },
     create: {
       ownerId: owner.id,
       name: 'Motel La Brisa',
@@ -48,6 +61,7 @@ async function main() {
       description: 'Disfruta con total privacidad.',
       status: 'ACTIVE',
       paymentInfo,
+      settings: defaultSettings,
     },
   })
   console.log('✅ Hotel:', hotel.name)

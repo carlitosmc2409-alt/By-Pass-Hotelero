@@ -4,6 +4,7 @@ const { validateHotelBridgeToken } = require('../../utils/crypto')
 const {
   normalizeRef,
   activateApprovedPaymentInTx,
+  broadcastActivationEvents,
   reconcilePayment,
   recordBankEvent,
 } = require('./paymentVerifier')
@@ -95,11 +96,15 @@ async function handleSubmitProof(request, reply) {
         status: 'APPROVED',
         autoVerified: true,
         isExtension: Boolean(result.isExtension),
+        isRoomService: Boolean(result.isRoomService),
         reservationId: result.reservationId || payment.reservationId,
+        orderReservationId: result.orderReservationId || null,
         bankEventId: result.bankEventId,
-        message: result.isExtension
-          ? 'Extensión verificada automáticamente. El horario de tu llave QR ya fue ampliado.'
-          : 'Pago verificado automáticamente. Tu reserva está activa y ya puedes obtener tu QR.',
+        message: result.isRoomService
+          ? 'Consumo pagado automáticamente. En minutos estará en la esclusa privada de tu habitación.'
+          : result.isExtension
+            ? 'Extensión verificada automáticamente. El horario de tu llave QR ya fue ampliado.'
+            : 'Pago verificado automáticamente. Tu reserva está activa y ya puedes obtener tu QR.',
       })
     }
 
@@ -181,12 +186,25 @@ async function handleConfirmPayment(request, reply) {
     })
   )
 
+  broadcastActivationEvents({
+    hotelId: payment.reservation.room.hotelId,
+    guestId: payment.reservation.guestId,
+    roomId: payment.reservation.roomId,
+    roomName: payment.reservation.room.name,
+    paymentId: payment.id,
+    activation,
+  })
+
   return reply.send({
-    message: activation.isExtension
-      ? 'Extensión confirmada. El horario del QR del huésped fue ampliado.'
-      : 'Pago confirmado. La reserva está activa y el huésped ya puede obtener su QR.',
+    message: activation.isRoomService
+      ? 'Pago de consumo confirmado. Orden enviada a entrega en pasaplatos.'
+      : activation.isExtension
+        ? 'Extensión confirmada. El horario del QR del huésped fue ampliado.'
+        : 'Pago confirmado. La reserva está activa y el huésped ya puede obtener su QR.',
     reservationId: activation.targetReservationId,
+    orderReservationId: activation.orderReservationId || null,
     isExtension: activation.isExtension,
+    isRoomService: Boolean(activation.isRoomService),
   })
 }
 
@@ -232,9 +250,12 @@ async function handleListPending(request, reply) {
     },
     include: {
       reservation: {
-        include: {
+        select: {
+          id: true,
+          checkIn: true,
+          checkOut: true,
+          durationHours: true,
           room: { select: { name: true } },
-          guest: { select: { fullName: true, phone: true } },
         },
       },
     },
