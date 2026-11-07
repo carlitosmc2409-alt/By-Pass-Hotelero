@@ -35,6 +35,16 @@ async function main() {
   }
   const staffPinHash = await bcrypt.hash('1234', 10)
   const defaultSettings = {
+    faac: {
+      enabled: true,
+      model: 'FAAC 615 BPR / Placa E615',
+      entryDeviceId: 'faac-entrada-1',
+      exitDeviceId: 'faac-salida-1',
+      contactType: 'NO (OPEN-A + GND)',
+      pulseDurationMs: 1000,
+      exitGraceMinutes: 15,
+      relayWebhookUrl: 'http://localhost:3090/rpc/pulse',
+    },
     cleaningStaff: [
       {
         id: '00000000-0000-4000-8000-000000000901',

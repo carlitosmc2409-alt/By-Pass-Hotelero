@@ -3,7 +3,10 @@ const {
   generateReservationQr,
   invalidateQrToken,
   triggerFaacBarrierPulse,
+  pingFaacRelayWebhook,
 } = require('../../utils/qr')
+const { validateHotelIotToken } = require('../../utils/crypto')
+const { recordDeviceHeartbeat, listHotelDevices } = require('../../utils/iotRegistry')
 const { normalizeHotelSettings } = require('../../utils/hotelSettings')
 const { emitRealtimeEvent } = require('../../utils/eventBus')
 const { prisma } = require('../../config/database')
@@ -255,10 +258,93 @@ async function handleGetQr(request, reply) {
   })
 }
 
+const iotHeartbeatSchema = z.object({
+  hotelId: z.string().uuid(),
+  deviceId: z.string().min(2).max(80),
+  zone: z.string().max(40).optional(),
+  firmware: z.string().max(60).optional(),
+  rssiDbm: z.number().optional(),
+  opticalReader: z.string().max(60).optional(),
+  safePhotocell: z.string().max(40).optional(),
+  relayState: z.string().max(40).optional(),
+  uptimeSec: z.number().nonnegative().optional(),
+  emulated: z.boolean().optional(),
+})
+
+const testRelaySchema = z.object({
+  hotelId: z.string().uuid(),
+  direction: z.enum(['ENTRY', 'EXIT']).default('ENTRY'),
+  dryRun: z.boolean().default(true),
+})
+
+// POST /api/v1/access/iot/heartbeat
+// Telemetría periódica de controladoras ESP32 + lector óptico GM65 + bornera FAAC
+async function handleIotHeartbeat(request, reply) {
+  const data = iotHeartbeatSchema.parse(request.body)
+  const iotToken =
+    request.headers['x-hotel-iot-token'] ||
+    request.headers['x-hotel-bridge-token'] ||
+    ''
+
+  if (!validateHotelIotToken(data.hotelId, String(iotToken))) {
+    return reply.status(401).send({ message: 'Token de controladora IoT inválido' })
+  }
+
+  const device = recordDeviceHeartbeat({
+    ...data,
+    ip: request.ip,
+  })
+
+  emitRealtimeEvent({
+    hotelId: data.hotelId,
+    type: 'IOT_DEVICE_HEARTBEAT',
+    payload: { device },
+  })
+
+  return reply.send({ ok: true, device })
+}
+
+// GET /api/v1/access/iot/devices/:hotelId
+// Lista las controladoras FAAC / cerraduras detectadas en línea para el hotel
+async function handleListIotDevices(request, reply) {
+  const { hotelId } = request.params
+  const hotel = await prisma.hotel.findUnique({ where: { id: hotelId } })
+  if (!hotel || hotel.ownerId !== request.user.id) {
+    return reply.status(403).send({ message: 'Sin acceso a este hotel' })
+  }
+  return reply.send({
+    hotelId,
+    devices: listHotelDevices(hotelId),
+  })
+}
+
+// POST /api/v1/access/iot/test-relay
+// Diagnóstico pre-instalación / en vivo del enlace Webhook hacia el relé IP de la barrera FAAC
+async function handleTestFaacRelay(request, reply) {
+  const { hotelId, direction, dryRun } = testRelaySchema.parse(request.body)
+  const hotel = await prisma.hotel.findUnique({ where: { id: hotelId } })
+  if (!hotel || hotel.ownerId !== request.user.id) {
+    return reply.status(403).send({ message: 'Sin acceso a este hotel' })
+  }
+
+  const settings = normalizeHotelSettings(hotel.settings)
+  const diagnostic = await pingFaacRelayWebhook({
+    hotelId,
+    faacConfig: settings.faac,
+    direction,
+    dryRun,
+  })
+
+  return reply.send(diagnostic)
+}
+
 module.exports = {
   handleValidateQr,
   handleGuestOpenFaac,
   handleOwnerPulseFaac,
   handleCheckout,
   handleGetQr,
+  handleIotHeartbeat,
+  handleListIotDevices,
+  handleTestFaacRelay,
 }

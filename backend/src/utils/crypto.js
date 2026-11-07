@@ -102,6 +102,31 @@ function validateHotelBridgeToken(hotelId, receivedToken) {
   return crypto.timingSafeEqual(received, expected)
 }
 
+/**
+ * Genera un token HMAC determinista por hotel para controladoras físicas IoT
+ * (ESP32 / Relés IP de barreras FAAC y cerraduras QR).
+ */
+function generateHotelIotToken(hotelId) {
+  return crypto
+    .createHmac('sha256', env.QR_SECRET_KEY)
+    .update(`iot-faac:${String(hotelId)}`)
+    .digest('hex')
+}
+
+/**
+ * Valida en tiempo constante el token de hardware IoT (o acepta también el bridge token del hotel).
+ */
+function validateHotelIotToken(hotelId, receivedToken) {
+  if (!hotelId || typeof receivedToken !== 'string') return false
+  const expectedHex = generateHotelIotToken(hotelId)
+  const received = Buffer.from(receivedToken, 'hex')
+  const expected = Buffer.from(expectedHex, 'hex')
+  if (received.length === expected.length && crypto.timingSafeEqual(received, expected)) {
+    return true
+  }
+  return validateHotelBridgeToken(hotelId, receivedToken)
+}
+
 module.exports = {
   hashValue,
   generateOtp,
@@ -110,4 +135,6 @@ module.exports = {
   hashQrToken,
   generateHotelBridgeToken,
   validateHotelBridgeToken,
+  generateHotelIotToken,
+  validateHotelIotToken,
 }

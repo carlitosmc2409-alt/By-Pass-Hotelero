@@ -6,7 +6,7 @@ const DEFAULT_FAAC_CONFIG = {
   contactType: 'NO (OPEN-A + GND)',
   pulseDurationMs: 1000,
   exitGraceMinutes: 15,
-  relayWebhookUrl: '',
+  relayWebhookUrl: 'http://localhost:3090/rpc/pulse',
 }
 
 const DEFAULT_ROOM_SERVICE_MENU = [

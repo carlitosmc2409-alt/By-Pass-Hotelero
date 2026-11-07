@@ -1,6 +1,7 @@
 const { prisma } = require('../../config/database')
 const env = require('../../config/env')
-const { generateHotelBridgeToken } = require('../../utils/crypto')
+const { generateHotelBridgeToken, generateHotelIotToken } = require('../../utils/crypto')
+const { listHotelDevices } = require('../../utils/iotRegistry')
 const { getRate } = require('../../utils/rates')
 const { normalizeHotelSettings, sanitizeStaffList } = require('../../utils/hotelSettings')
 const { parseRoomServiceNote, ROOM_SERVICE_PREFIX } = require('../reservations/reservations.controller')
@@ -607,11 +608,13 @@ async function handleOwnerDashboard(request, reply) {
       status: hotel.status,
       paymentInfo: hotel.paymentInfo,
       bdvBridgeToken: generateHotelBridgeToken(hotel.id),
+      iotHardwareToken: generateHotelIotToken(hotel.id),
       currentExchangeRate,
       faac: normSettings.faac,
       roomServiceMenu: normSettings.roomServiceMenu,
       cleaningStaff: sanitizeStaffList(normSettings.cleaningStaff),
     },
+    iotDevices: listHotelDevices(id),
     metrics: {
       totalRooms: roomsFormatted.length,
       availableRooms: roomsFormatted.filter(r => r.status === 'AVAILABLE').length,

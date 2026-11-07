@@ -23,6 +23,19 @@ async function accessRoutes(fastify) {
   fastify.get('/qr/:reservationId', {
     preHandler: [fastify.authenticate, fastify.authorizeGuest],
   }, ctrl.handleGetQr)
+
+  // POST /api/v1/access/iot/heartbeat  — telemetría de tótems ESP32 / GM65 / relés FAAC
+  fastify.post('/iot/heartbeat', ctrl.handleIotHeartbeat)
+
+  // GET /api/v1/access/iot/devices/:hotelId  — estado en vivo de controladoras IoT
+  fastify.get('/iot/devices/:hotelId', {
+    preHandler: [fastify.authenticate, fastify.authorizeOwner],
+  }, ctrl.handleListIotDevices)
+
+  // POST /api/v1/access/iot/test-relay  — diagnóstico de enlace hacia relé IP FAAC
+  fastify.post('/iot/test-relay', {
+    preHandler: [fastify.authenticate, fastify.authorizeOwner],
+  }, ctrl.handleTestFaacRelay)
 }
 
 module.exports = accessRoutes

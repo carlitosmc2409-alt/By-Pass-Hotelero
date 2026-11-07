@@ -304,6 +304,7 @@
         <p>Contacto seco OPEN-A + GND · Validación criptográfica HMAC-SHA256 + Escucha SSE en vivo</p>
       </div>
       <span id="sseStatus" class="sse-pill">● CONECTANDO SSE</span>
+      <span id="hidStatus" class="sse-pill" style="background: rgba(56, 189, 248, 0.14); color: var(--cyan); border-color: rgba(56, 189, 248, 0.35);">🔌 USB HID ÓPTICO LISTO</span>
     </div>
     <div class="api-bar">
       <input id="apiBase" value="http://localhost:3000/api/v1" style="width: 245px;" title="API Backend URL" />
@@ -380,6 +381,19 @@
           </label>
         </div>
         <video id="camVideo" autoplay muted playsinline></video>
+
+        <hr style="border: none; border-top: 1px solid var(--border); margin: 16px 0;" />
+
+        <div class="section-title">
+          <span>3. Pre-Instalación Hardware: ESP32 + Lector GM65 (:3090)</span>
+          <span id="espStatusBadge" style="font-size: 11px; color: var(--warn); font-weight: 700;">● BUSCANDO :3090</span>
+        </div>
+        <div id="espPinReadout" style="font-family: monospace; font-size: 11.5px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; line-height: 1.5;">
+          UART2(GPIO16): -- · RELÉ OPEN-A(GPIO26): -- · SAFE(GPIO33): --
+        </div>
+        <div class="btn-row">
+          <button onclick="simulateGm65OpticalScan()">🔬 Simular Lectura UART2 GM65 → ESP32 (:3090)</button>
+        </div>
       </div>
 
       <div class="card">
@@ -743,7 +757,139 @@
       }
     }
 
+    // =========================================================================
+    // Escucha Plug-and-Play para Lectores Ópticos Físicos USB HID (Keyboard Wedge)
+    // Compatible sin drivers con Grow GM65 USB, Newland FM430, Zebra DS2208, Honeywell
+    // =========================================================================
+    let hidBuffer = '';
+    let hidLastKeyTime = 0;
+
+    window.addEventListener('keydown', (ev) => {
+      const tag = (document.activeElement && document.activeElement.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      const now = Date.now();
+      if (now - hidLastKeyTime > 85) {
+        hidBuffer = '';
+      }
+      hidLastKeyTime = now;
+
+      if (ev.key === 'Enter') {
+        if (hidBuffer.length >= 12) {
+          ev.preventDefault();
+          const scanned = hidBuffer.trim();
+          hidBuffer = '';
+          const hidBadge = document.getElementById('hidStatus');
+          hidBadge.textContent = '⚡ LECTURA ÓPTICA USB HID';
+          setTimeout(() => {
+            hidBadge.textContent = '🔌 USB HID ÓPTICO LISTO';
+          }, 2200);
+          document.getElementById('tokenInput').value = scanned;
+          appendLog(true, 'Trama capturada desde lector óptico USB HID', 'USB-HID');
+          validateRawToken(scanned);
+        } else {
+          hidBuffer = '';
+        }
+        return;
+      }
+
+      if (ev.key && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        hidBuffer += ev.key;
+      }
+    });
+
+    // =========================================================================
+    // Telemetría y Simulación UART2 contra Controladora Virtual ESP32 (:3090)
+    // =========================================================================
+    const ESP32_VIRTUAL_URL = 'http://localhost:3090';
+
+    async function pollVirtualEsp32Status() {
+      const badge = document.getElementById('espStatusBadge');
+      const box = document.getElementById('espPinReadout');
+      try {
+        const res = await fetch(`${ESP32_VIRTUAL_URL}/status`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const st = await res.json();
+        badge.textContent = `● ESP32 :3090 ONLINE (Pulsos: ${st.pulseCount || 0})`;
+        badge.style.color = 'var(--ok)';
+        const pins = st.pins || {};
+        box.textContent =
+          `UART2: ${pins.GPIO16_UART2_RX || 'READY'} · ` +
+          `GPIO26: ${pins.GPIO26_RELAY_OPEN_A || 'LOW'} · ` +
+          `SAFE(GPIO33): ${pins.GPIO33_SAFE_PHOTOCELL || 'CLEAR'}`;
+      } catch (_) {
+        badge.textContent = '○ ESP32 :3090 OFFLINE';
+        badge.style.color = 'var(--muted)';
+      }
+    }
+
+    async function simulateGm65OpticalScan() {
+      let token = document.getElementById('tokenInput').value.trim();
+      if (!token) {
+        try {
+          const clip = await navigator.clipboard.readText();
+          if (clip && clip.trim().length >= 10) {
+            token = clip.trim();
+            document.getElementById('tokenInput').value = token;
+          }
+        } catch (_) {}
+      }
+      const deviceId = document.getElementById('deviceSelect').value;
+
+      if (token.length < 10) {
+        playTone(false);
+        appendLog(false, 'Pega primero un token QR de la App del Huésped para inyectarlo por UART2 GM65.', 'GM65-UART2');
+        return;
+      }
+
+      try {
+        const res = await fetch(`${ESP32_VIRTUAL_URL}/simulate-gm65-scan`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, deviceId }),
+        });
+        const data = await res.json();
+        const tel = data.esp32Telemetry || {};
+        await pollVirtualEsp32Status();
+
+        if (res.ok && data.allowed) {
+          playTone(true);
+          renderTerminalState({
+            state: 'granted',
+            title: '¡Lectura Óptica GM65 Validada por ESP32!',
+            message: `${data.message} · RTT Hardware: ${tel.backendRttMs ?? '-'} ms · GPIO26 activado.`,
+            pulseMs: (data.faacPulse && data.faacPulse.pulseDurationMs) || 1000,
+            pills: [
+              `Suite: ${data.roomName}`,
+              `Puerto: ${tel.uartPort || 'UART2'}`,
+              `RTT: ${tel.backendRttMs ?? '-'} ms`,
+              `SAFE: ${tel.safePhotocell || 'CLEAR'}`,
+            ],
+          });
+          appendLog(
+            true,
+            `GM65 UART2 → ESP32 → API (${tel.backendRttMs ?? '-'}ms) · GPIO26 pulso ejecutado`,
+            deviceId
+          );
+        } else {
+          playTone(false);
+          renderTerminalState({
+            state: 'denied',
+            title: 'GM65 Lectura Rechazada',
+            message: data.message || 'El ESP32 mantuvo GPIO26 abierto (bloqueado).',
+            pills: [`Tótem: ${deviceId}`, `SAFE: ${tel.safePhotocell || 'CLEAR'}`],
+          });
+          appendLog(false, `GM65 rechazado: ${data.message || 'QR inválido'}`, deviceId);
+        }
+      } catch (e) {
+        playTone(false);
+        appendLog(false, 'Emulador ESP32 (:3090) no disponible: ' + e.message, 'ESP32');
+      }
+    }
+
     loadHotelRooms();
+    pollVirtualEsp32Status();
+    setInterval(pollVirtualEsp32Status, 3000);
   </script>
 </body>
 </html>

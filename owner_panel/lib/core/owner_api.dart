@@ -401,6 +401,25 @@ class OwnerApiClient {
     return data as Map<String, dynamic>;
   }
 
+  Future<Map<String, dynamic>> testFaacRelay({
+    required String hotelId,
+    String direction = 'ENTRY',
+    bool dryRun = true,
+  }) async {
+    final data = await _sendWithRefresh(
+      () => http.post(
+        Uri.parse('$baseUrl/access/iot/test-relay'),
+        headers: _headers(),
+        body: jsonEncode({
+          'hotelId': hotelId,
+          'direction': direction,
+          'dryRun': dryRun,
+        }),
+      ),
+    );
+    return data as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> updateHotelOperations({
     required String hotelId,
     Map<String, dynamic>? faac,

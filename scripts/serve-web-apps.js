@@ -84,3 +84,13 @@ startStaticServer(
   path.join(ROOT, 'door_scanner'),
   8083
 )
+
+// Iniciar también la Controladora Virtual ESP32 + Lector Óptico GM65 + Relé FAAC (:3090)
+try {
+  const { startVirtualFaacController } = require(
+    path.join(ROOT, 'hardware_iot', 'virtual_faac_controller.js')
+  )
+  startVirtualFaacController(3090)
+} catch (err) {
+  console.warn('⚠️ No se pudo iniciar el emulador ESP32 FAAC (:3090):', err.message)
+}

@@ -1,13 +1,97 @@
 const QRCode = require('qrcode')
-const { generateQrToken } = require('./crypto')
+const { generateQrToken, generateHotelIotToken } = require('./crypto')
 const dayjs = require('dayjs')
 const { prisma } = require('../config/database')
 const { normalizeHotelSettings } = require('./hotelSettings')
 const { emitRealtimeEvent } = require('./eventBus')
+const { recordDevicePulse } = require('./iotRegistry')
+
+/**
+ * Envía una prueba diagnóstica (dryRun o pulso real) al relé IP / ESP32 configurado en `relayWebhookUrl`
+ * firmada con `x-hotel-iot-token` y mide la latencia exacta en milisegundos.
+ */
+async function pingFaacRelayWebhook({
+  hotelId,
+  faacConfig,
+  direction = 'ENTRY',
+  dryRun = true,
+}) {
+  const webhookUrl = typeof faacConfig?.relayWebhookUrl === 'string'
+    ? faacConfig.relayWebhookUrl.trim()
+    : ''
+  if (!/^https?:\/\//i.test(webhookUrl)) {
+    return {
+      configured: false,
+      reachable: false,
+      message: 'No hay una URL de Relé IP (relayWebhookUrl) configurada aún.',
+    }
+  }
+
+  const deviceId =
+    direction === 'EXIT' ? faacConfig?.exitDeviceId : faacConfig?.entryDeviceId
+  const payload = {
+    controller: 'FAAC',
+    model: faacConfig?.model || 'FAAC 615 BPR / Placa E615',
+    direction,
+    deviceId: deviceId || 'faac-entrada-1',
+    contact: faacConfig?.contactType || 'NO (OPEN-A + GND)',
+    pulseDurationMs: Number(faacConfig?.pulseDurationMs || 1000),
+    dryRun: Boolean(dryRun),
+    triggeredBy: dryRun ? 'DIAGNOSTIC_PING' : 'OWNER_TEST_PULSE',
+    triggeredAt: new Date().toISOString(),
+  }
+
+  const started = Date.now()
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-hotel-id': String(hotelId),
+        'x-hotel-iot-token': generateHotelIotToken(hotelId),
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(3000),
+    })
+    const latencyMs = Date.now() - started
+    let relayBody = null
+    try {
+      relayBody = await res.json()
+    } catch (_) {}
+
+    if (!dryRun && res.ok) {
+      recordDevicePulse({ hotelId, deviceId: payload.deviceId, latencyMs })
+    }
+
+    return {
+      configured: true,
+      reachable: res.ok,
+      statusCode: res.status,
+      latencyMs,
+      webhookUrl,
+      dryRun: Boolean(dryRun),
+      relayBody,
+      message: res.ok
+        ? (dryRun
+            ? `Controladora FAAC en línea (${latencyMs} ms) · Bornera OPEN-A lista (sin abrir barrera)`
+            : `Pulso real ejecutado en controladora FAAC (${latencyMs} ms)`)
+        : `El relé respondió con código HTTP ${res.status}`,
+    }
+  } catch (err) {
+    return {
+      configured: true,
+      reachable: false,
+      latencyMs: Date.now() - started,
+      webhookUrl,
+      dryRun: Boolean(dryRun),
+      message: `Controladora IP no accesible en ${webhookUrl}: ${err.message}`,
+    }
+  }
+}
 
 /**
  * Dispara el pulso de contacto seco hacia el controlador de Barrera Vehicular FAAC
- * (ej. placas FAAC E615 / E620 / E680 en bornera OPEN-A + GND) vía relé IP opcional
+ * (ej. placas FAAC E615 / E620 / E680 en bornera OPEN-A + GND) vía relé IP firmado
  * y transmite el evento en tiempo real por SSE al Panel, App y Terminal IoT.
  */
 function triggerFaacBarrierPulse({
@@ -32,16 +116,40 @@ function triggerFaacBarrierPulse({
     triggeredAt: new Date().toISOString(),
   }
 
+  recordDevicePulse({ hotelId, deviceId: pulse.deviceId })
+
   const webhookUrl = typeof faacConfig?.relayWebhookUrl === 'string'
     ? faacConfig.relayWebhookUrl.trim()
     : ''
   if (/^https?:\/\//i.test(webhookUrl)) {
+    const t0 = Date.now()
     fetch(webhookUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-hotel-id': String(hotelId),
+        'x-hotel-iot-token': generateHotelIotToken(hotelId),
+      },
       body: JSON.stringify(pulse),
       signal: AbortSignal.timeout(2500),
-    }).catch(() => {})
+    })
+      .then(async res => {
+        if (res.ok) {
+          const latencyMs = Date.now() - t0
+          recordDevicePulse({ hotelId, deviceId: pulse.deviceId, latencyMs })
+          emitRealtimeEvent({
+            hotelId,
+            type: 'FAAC_RELAY_ACK',
+            payload: {
+              deviceId: pulse.deviceId,
+              direction,
+              latencyMs,
+              acknowledgedAt: new Date().toISOString(),
+            },
+          })
+        }
+      })
+      .catch(() => {})
   }
 
   emitRealtimeEvent({
@@ -315,4 +423,5 @@ module.exports = {
   validateQrToken,
   invalidateQrToken,
   triggerFaacBarrierPulse,
+  pingFaacRelayWebhook,
 }

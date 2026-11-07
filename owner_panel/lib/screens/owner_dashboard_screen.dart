@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../core/bdv_bridge_service.dart';
 import '../core/owner_api.dart';
 import '../core/owner_theme.dart';
@@ -66,6 +67,8 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
   final _faacGraceMinsCtrl = TextEditingController();
   final _faacWebhookCtrl = TextEditingController();
   bool _savingFaac = false;
+  bool _testingRelay = false;
+  Map<String, dynamic>? _lastRelayDiagnostic;
 
   @override
   void initState() {
@@ -128,6 +131,8 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
         'ROOM_SERVICE_ORDER',
         'ROOM_SERVICE_DELIVERED',
         'FAAC_BARRIER_PULSE',
+        'FAAC_RELAY_ACK',
+        'IOT_DEVICE_HEARTBEAT',
         'DOOR_UNLOCK_PULSE',
       }.contains(type)) {
         _refreshDashboard(silent: true);
@@ -304,6 +309,61 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
     } finally {
       if (mounted) setState(() => _savingFaac = false);
     }
+  }
+
+  Future<void> _runRelayDiagnostic({bool dryRun = true}) async {
+    final hotelId = _selectedHotelId;
+    if (hotelId == null || _testingRelay) return;
+    setState(() => _testingRelay = true);
+    try {
+      final res = await widget.api.testFaacRelay(
+        hotelId: hotelId,
+        direction: 'ENTRY',
+        dryRun: dryRun,
+      );
+      if (!mounted) return;
+      setState(() => _lastRelayDiagnostic = res);
+      final ok = res['reachable'] == true;
+      _showSnack(
+        res['message']?.toString() ??
+            (ok ? 'Controladora FAAC en línea' : 'Controladora no accesible'),
+        isError: !ok,
+      );
+      await _refreshDashboard(silent: true);
+    } catch (e) {
+      _showSnack(e.toString(), isError: true);
+    } finally {
+      if (mounted) setState(() => _testingRelay = false);
+    }
+  }
+
+  Future<void> _copyEsp32ProvisioningHeader() async {
+    final hotel = (_dashboard?['hotel'] as Map<String, dynamic>?) ?? {};
+    final hotelId = (hotel['id'] ?? '').toString();
+    final iotToken = (hotel['iotHardwareToken'] ?? '').toString();
+    final entryId = _faacEntryIdCtrl.text.trim().isEmpty
+        ? 'faac-entrada-1'
+        : _faacEntryIdCtrl.text.trim();
+    final exitId = _faacExitIdCtrl.text.trim().isEmpty
+        ? 'faac-salida-1'
+        : _faacExitIdCtrl.text.trim();
+    final pulseMs = int.tryParse(_faacPulseMsCtrl.text.trim()) ?? 1000;
+
+    final snippet = '''
+// ============================================================================
+// StayPass QR · Credenciales de Aprovisionamiento ESP32 + Lector GM65 + FAAC
+// Hotel: ${hotel['name'] ?? 'Motel'}
+// Pegar en hardware_iot/esp32_faac_totem/esp32_faac_totem.ino
+// ============================================================================
+const char* API_BASE_URL   = "${OwnerApiClient.baseUrl}";
+const char* HOTEL_ID       = "$hotelId";
+const char* IOT_TOKEN      = "$iotToken";
+const char* DEVICE_ID      = "$entryId"; // o "$exitId" para tótem de salida
+const uint32_t RELAY_PULSE_MS = $pulseMs; // Bornera J5: OPEN-A + GND
+''';
+
+    await Clipboard.setData(ClipboardData(text: snippet));
+    _showSnack('📋 Configuración C++ para ESP32 copiada al portapapeles.');
   }
 
   Future<void> _deliverRoomService(String orderId, String roomName) async {
@@ -1297,6 +1357,8 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
     final hotel = (_dashboard?['hotel'] as Map<String, dynamic>?) ?? {};
     final staffList = ((hotel['cleaningStaff'] as List<dynamic>?) ?? [])
         .cast<Map<String, dynamic>>();
+    final iotDevices = ((_dashboard?['iotDevices'] as List<dynamic>?) ?? [])
+        .cast<Map<String, dynamic>>();
     final pendingDeliveries =
         ((_dashboard?['pendingDeliveries'] as List<dynamic>?) ?? [])
             .cast<Map<String, dynamic>>();
@@ -1503,10 +1565,178 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
                     controller: _faacWebhookCtrl,
                     decoration: const InputDecoration(
                       labelText:
-                          'Webhook Relé IP Local (opcional, ej: http://192.168.1.50/rpc/Switch.Set)',
+                          'Webhook Relé IP / ESP32 (ej: http://localhost:3090/rpc/pulse o http://192.168.1.50/rpc/pulse)',
                       prefixIcon: Icon(Icons.lan_outlined),
                     ),
                   ),
+                  const SizedBox(height: 16),
+
+                  // Bloque de Pre-Instalación: Telemetría IoT + Diagnóstico sin abrir + Aprovisionamiento ESP32
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: OwnerTheme.surface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: OwnerTheme.cyan.withValues(alpha: 0.28),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                '📡 Controladoras IoT & Lector Óptico GM65 (Pre-Instalación / En Vivo)',
+                                style: TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: OwnerTheme.cyan,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              '${iotDevices.where((d) => d['online'] == true).length} en línea',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: iotDevices.any((d) => d['online'] == true)
+                                    ? OwnerTheme.available
+                                    : OwnerTheme.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        if (iotDevices.isEmpty)
+                          const Text(
+                            'Sin tótems físicos detectados aún. El emulador virtual (:3090) o tu placa ESP32 aparecerán aquí automáticamente al enviar su primer heartbeat.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: OwnerTheme.textSecondary,
+                            ),
+                          )
+                        else
+                          for (final dev in iotDevices)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: Wrap(
+                                spacing: 8,
+                                runSpacing: 4,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.circle,
+                                    size: 9,
+                                    color: dev['online'] == true
+                                        ? OwnerTheme.available
+                                        : OwnerTheme.textSecondary,
+                                  ),
+                                  Text(
+                                    '${dev['deviceId']}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12.5,
+                                    ),
+                                  ),
+                                  Text(
+                                    '· ${dev['opticalReader'] ?? 'GM65'} · SAFE: ${dev['safePhotocell'] ?? 'CLEAR'} · RSSI ${dev['rssiDbm'] ?? '-'} dBm · Pulsos: ${dev['pulseCount'] ?? 0}',
+                                    style: const TextStyle(
+                                      fontSize: 11.5,
+                                      color: OwnerTheme.textSecondary,
+                                    ),
+                                  ),
+                                  if (dev['emulated'] == true)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 7,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: OwnerTheme.gold
+                                            .withValues(alpha: 0.16),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Text(
+                                        'EMULADOR :3090',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w800,
+                                          color: OwnerTheme.gold,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                        if (_lastRelayDiagnostic != null) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: (_lastRelayDiagnostic!['reachable'] == true
+                                      ? OwnerTheme.available
+                                      : OwnerTheme.occupied)
+                                  .withValues(alpha: 0.13),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${_lastRelayDiagnostic!['message'] ?? ''} '
+                              '(${_lastRelayDiagnostic!['latencyMs'] ?? '-'} ms)',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color:
+                                    _lastRelayDiagnostic!['reachable'] == true
+                                        ? OwnerTheme.available
+                                        : OwnerTheme.occupied,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: _testingRelay
+                                  ? null
+                                  : () => _runRelayDiagnostic(dryRun: true),
+                              icon: const Icon(
+                                Icons.network_check_rounded,
+                                size: 17,
+                                color: OwnerTheme.cyan,
+                              ),
+                              label: Text(
+                                _testingRelay
+                                    ? 'Probando Relé...'
+                                    : 'Diagnóstico Relé IP (Dry-Run)',
+                                style: const TextStyle(color: OwnerTheme.cyan),
+                              ),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _copyEsp32ProvisioningHeader,
+                              icon: const Icon(
+                                Icons.copy_all_rounded,
+                                size: 17,
+                                color: OwnerTheme.gold,
+                              ),
+                              label: const Text(
+                                'Copiar Header ESP32 (.ino)',
+                                style: TextStyle(color: OwnerTheme.gold),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+
                   const SizedBox(height: 14),
                   Align(
                     alignment: Alignment.centerRight,
