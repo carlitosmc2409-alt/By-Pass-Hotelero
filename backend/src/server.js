@@ -12,9 +12,15 @@ async function start() {
   startCronJobs()
 
   try {
-    await app.listen({ port: env.PORT, host: env.HOST })
-    console.log(`🚀 Servidor corriendo en http://${env.HOST}:${env.PORT}`)
-    console.log(`📖 API disponible en http://${env.HOST}:${env.PORT}${env.API_PREFIX}`)
+    // En Windows, escuchar en '::' habilita dual-stack (::1 + 127.0.0.1 + LAN) evitando demoras en localhost
+    const listenHost = env.HOST === '0.0.0.0' ? '::' : env.HOST
+    try {
+      await app.listen({ port: env.PORT, host: listenHost })
+    } catch {
+      await app.listen({ port: env.PORT, host: env.HOST })
+    }
+    console.log(`🚀 Servidor corriendo en http://localhost:${env.PORT}`)
+    console.log(`📖 API disponible en http://localhost:${env.PORT}${env.API_PREFIX}`)
   } catch (err) {
     app.log.error(err)
     process.exit(1)

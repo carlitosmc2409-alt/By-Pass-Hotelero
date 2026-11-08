@@ -291,7 +291,8 @@ function startVirtualFaacController(port = PORT) {
     return sendJson(res, 404, { ok: false, message: 'Ruta no encontrada en ESP32 virtual' })
   })
 
-  server.listen(port, '0.0.0.0', () => {
+  // Dual-stack (::1 + 127.0.0.1 + LAN) para respuesta instantánea en localhost de Windows
+  server.listen(port, () => {
     console.log(
       `✅ Controladora Virtual ESP32 + Lector GM65 + FAAC activa en http://localhost:${port}`
     )

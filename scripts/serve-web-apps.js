@@ -64,7 +64,8 @@ function startStaticServer(name, baseDir, port) {
     })
   })
 
-  server.listen(port, '0.0.0.0', () => {
+  // Omitir host escucha en dual-stack (IPv6 ::1 + IPv4 127.0.0.1 + LAN 0.0.0.0) en Windows
+  server.listen(port, () => {
     console.log(`✅ ${name} disponible en http://localhost:${port}`)
   })
 }
