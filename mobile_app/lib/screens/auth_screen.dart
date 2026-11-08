@@ -59,6 +59,42 @@ class _AuthScreenState extends State<AuthScreen> {
     super.dispose();
   }
 
+  Future<void> _openServerUrlDialog() async {
+    final ctrl = TextEditingController(text: ApiClient.baseUrl);
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.card,
+        title: const Text('Servidor API StayPass'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(
+            labelText: 'URL API (ej: http://192.168.0.122:3000/api/v1)',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    if (saved != null && saved.isNotEmpty) {
+      await ApiClient.setCustomBaseUrl(saved);
+      await _loadBanks();
+      if (mounted) {
+        setState(() {
+          _info = 'Conectado a ${ApiClient.baseUrl}';
+        });
+      }
+    }
+  }
+
   Future<void> _loadBanks() async {
     try {
       final list = await widget.api.fetchBanks();
@@ -151,6 +187,25 @@ class _AuthScreenState extends State<AuthScreen> {
         child: SafeArea(
           child: Stack(
             children: [
+              Positioned(
+                top: 8,
+                left: 12,
+                child: TextButton.icon(
+                  onPressed: _openServerUrlDialog,
+                  icon: const Icon(
+                    Icons.dns_outlined,
+                    size: 16,
+                    color: AppTheme.textSecondary,
+                  ),
+                  label: const Text(
+                    'Servidor',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ),
+              ),
               Positioned(
                 top: 8,
                 right: 12,

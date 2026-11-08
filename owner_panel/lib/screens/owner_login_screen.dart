@@ -38,6 +38,37 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
     super.dispose();
   }
 
+  Future<void> _openServerUrlDialog() async {
+    final ctrl = TextEditingController(text: OwnerApiClient.baseUrl);
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: OwnerTheme.card,
+        title: const Text('Servidor API StayPass'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(
+            labelText: 'URL API (ej: http://192.168.0.122:3000/api/v1)',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    if (saved != null && saved.isNotEmpty) {
+      await OwnerApiClient.setCustomBaseUrl(saved);
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> _login() async {
     setState(() {
       _loading = true;
@@ -95,6 +126,24 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: _openServerUrlDialog,
+                          icon: const Icon(
+                            Icons.dns_outlined,
+                            size: 16,
+                            color: OwnerTheme.textSecondary,
+                          ),
+                          label: const Text(
+                            'Servidor',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: OwnerTheme.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
                       Center(
                         child: Container(
                           width: 66,

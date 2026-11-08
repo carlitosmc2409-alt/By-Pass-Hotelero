@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
@@ -17,11 +18,32 @@ class ApiException implements Exception {
 class ApiClient {
   static const _kAccessKey = 'staypass_guest_access_token';
   static const _kRefreshKey = 'staypass_guest_refresh_token';
+  static const _kCustomApiUrlKey = 'staypass_custom_api_url';
 
-  static String baseUrl = const String.fromEnvironment(
+  static const String _compiledBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:3000/api/v1',
+    defaultValue: '',
   );
+
+  static String baseUrl = _resolveInitialBaseUrl();
+
+  static String _resolveInitialBaseUrl() {
+    if (_compiledBaseUrl.isNotEmpty) return _compiledBaseUrl;
+    if (kIsWeb && Uri.base.host.isNotEmpty) {
+      return 'http://${Uri.base.host}:3000/api/v1';
+    }
+    return 'http://localhost:3000/api/v1';
+  }
+
+  static Future<void> setCustomBaseUrl(String url) async {
+    final clean = url.trim().replaceAll(RegExp(r'/+$'), '');
+    if (clean.isEmpty) return;
+    baseUrl = clean;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kCustomApiUrlKey, clean);
+    } catch (_) {}
+  }
 
   String? _accessToken;
   String? _refreshToken;
@@ -40,6 +62,10 @@ class ApiClient {
   Future<bool> restoreSession() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      final savedUrl = prefs.getString(_kCustomApiUrlKey);
+      if (savedUrl != null && savedUrl.isNotEmpty) {
+        baseUrl = savedUrl;
+      }
       final access = prefs.getString(_kAccessKey);
       final refresh = prefs.getString(_kRefreshKey);
       if (access != null && access.isNotEmpty) {

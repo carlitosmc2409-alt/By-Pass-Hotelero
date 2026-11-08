@@ -31,4 +31,5 @@ start "" "http://localhost:8083"
 
 echo.
 echo Todo listo. Las 3 pestanas se abrieron en tu navegador.
+echo Para descargar las APKs en tu celular por Wi-Fi abre: http://localhost:8083/descargar
 pause
