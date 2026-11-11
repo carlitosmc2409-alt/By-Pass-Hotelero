@@ -5,6 +5,7 @@ import '../core/theme.dart';
 import '../models/models.dart';
 import 'booking_payment_screen.dart';
 import 'qr_stay_screen.dart';
+import 'room_detail_screen.dart';
 import 'stealth_screen.dart';
 
 class HotelsScreen extends StatefulWidget {
@@ -436,19 +437,19 @@ class _HotelsScreenState extends State<HotelsScreen> {
             ),
           ],
           bottom: TabBar(
-            indicatorColor: AppTheme.gold,
-            labelColor: AppTheme.gold,
+            indicatorColor: AppTheme.warmBeige,
+            labelColor: AppTheme.warmBeige,
             unselectedLabelColor: AppTheme.textSecondary,
             tabs: [
               const Tab(
-                icon: Icon(Icons.king_bed_outlined, size: 19),
-                text: 'Suites & Acceso FAAC',
+                icon: Icon(Icons.apartment_rounded, size: 19),
+                text: 'Hotel & Suites',
               ),
               Tab(
                 icon: Badge(
                   backgroundColor: AppTheme.accent,
                   isLabelVisible: activeStay != null || pendingStay != null,
-                  child: const Icon(Icons.vpn_key_outlined, size: 19),
+                  child: const Icon(Icons.calendar_month_outlined, size: 19),
                 ),
                 text: 'Mis Estadías',
               ),
@@ -503,6 +504,57 @@ class _HotelsScreenState extends State<HotelsScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Barra de búsqueda con estilo boutique similar al diseño
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppTheme.card,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.search_rounded, color: AppTheme.warmBeige, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Buscar suites, moteles o servicios...',
+                    style: TextStyle(
+                      color: AppTheme.textSecondary.withValues(alpha: 0.7),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: AppTheme.warmBeige.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.tune_rounded, size: 16, color: AppTheme.warmBeige),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Categorías rápidas tipo píldora (Hotel, Market, Suite, etc.)
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _categoryPill(Icons.apartment_rounded, 'Hotel / Motel', true),
+                const SizedBox(width: 10),
+                _categoryPill(Icons.directions_car_filled_outlined, 'Pase FAAC', false),
+                const SizedBox(width: 10),
+                _categoryPill(Icons.room_service_outlined, 'Room Service', false),
+                const SizedBox(width: 10),
+                _categoryPill(Icons.hot_tub_outlined, 'Jacuzzi VIP', false),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+
           if (activeStay != null) ...[
             Container(
               padding: const EdgeInsets.all(18),
@@ -892,163 +944,209 @@ class _HotelsScreenState extends State<HotelsScreen> {
     final tierAccent = AppTheme.roomTierAccent(room.type);
     final isCleaning = room.status == 'CLEANING';
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      decoration: BoxDecoration(
-        color: AppTheme.card,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: room.isAvailable
-              ? tierAccent.withValues(alpha: 0.28)
-              : Colors.white.withValues(alpha: 0.06),
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            decoration: BoxDecoration(
-              gradient: AppTheme.roomTierGradient(room.type),
+    return GestureDetector(
+      onTap: () async {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => RoomDetailScreen(
+              api: widget.api,
+              hotel: hotel,
+              room: room,
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      AppTheme.roomTierLabel(room.type).toUpperCase(),
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.0,
-                        color: tierAccent,
+          ),
+        );
+        _loadData();
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        decoration: BoxDecoration(
+          color: AppTheme.card,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: room.isAvailable
+                ? tierAccent.withValues(alpha: 0.28)
+                : Colors.white.withValues(alpha: 0.06),
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              decoration: BoxDecoration(
+                gradient: AppTheme.roomTierGradient(room.type),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        AppTheme.roomTierLabel(room.type).toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.0,
+                          color: tierAccent,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      _maskLabel(
-                        'Suite ${room.name}',
-                        fallback: 'Suite Privada •••',
+                      const SizedBox(height: 3),
+                      Text(
+                        _maskLabel(
+                          'Suite ${room.name}',
+                          fallback: 'Suite Privada •••',
+                        ),
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 11,
-                    vertical: 5,
+                    ],
                   ),
-                  decoration: BoxDecoration(
-                    color: (room.isAvailable
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 11,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: (room.isAvailable
+                              ? AppTheme.accent
+                              : isCleaning
+                                  ? AppTheme.cyan
+                                  : AppTheme.warning)
+                          .withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      room.isAvailable
+                          ? 'Disponible Ahora'
+                          : isCleaning
+                              ? 'Acondicionando'
+                              : 'Ocupada',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: room.isAvailable
                             ? AppTheme.accent
                             : isCleaning
                                 ? AppTheme.cyan
-                                : AppTheme.warning)
-                        .withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    room.isAvailable
-                        ? 'Disponible Ahora'
-                        : isCleaning
-                            ? 'Acondicionando'
-                            : 'Ocupada',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                      color: room.isAvailable
-                          ? AppTheme.accent
-                          : isCleaning
-                              ? AppTheme.cyan
-                              : AppTheme.warning,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Wrap(
-                  spacing: 7,
-                  runSpacing: 7,
-                  children: [
-                    _miniTag(Icons.directions_car_outlined, 'Garaje / FAAC'),
-                    _miniTag(Icons.room_service_outlined, 'Pasaplatos'),
-                    ...room.amenities.map((a) => _miniTag(Icons.star_outline, a)),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.baseline,
-                          textBaseline: TextBaseline.alphabetic,
-                          children: [
-                            Text(
-                              '\$${room.pricePerHour.toStringAsFixed(0)}',
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w800,
-                                color: AppTheme.gold,
-                              ),
-                            ),
-                            const Text(
-                              ' / hora',
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                color: AppTheme.textSecondary,
-                              ),
-                            ),
-                          ],
-                        ),
-                        Text(
-                          'Amanecida 24h: \$${room.pricePerNight.toStringAsFixed(0)} USD',
-                          style: const TextStyle(
-                            fontSize: 11.5,
-                            color: AppTheme.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(148, 44),
+                                : AppTheme.warning,
                       ),
-                      onPressed: room.isAvailable
-                          ? () async {
-                              await Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => BookingPaymentScreen(
-                                    api: widget.api,
-                                    hotel: hotel,
-                                    room: room,
-                                  ),
-                                ),
-                              );
-                              _loadData();
-                            }
-                          : null,
-                      icon: const Icon(Icons.qr_code_rounded, size: 17),
-                      label: const Text('Reservar'),
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 7,
+                    runSpacing: 7,
+                    children: [
+                      _miniTag(Icons.directions_car_outlined, 'Garaje / FAAC'),
+                      _miniTag(Icons.room_service_outlined, 'Pasaplatos'),
+                      ...room.amenities.map((a) => _miniTag(Icons.star_outline, a)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: [
+                              Text(
+                                '\$${room.pricePerHour.toStringAsFixed(0)}',
+                                style: const TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppTheme.warmBeige,
+                                ),
+                              ),
+                              const Text(
+                                ' / hora',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: AppTheme.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Text(
+                            'Amanecida 24h: \$${room.pricePerNight.toStringAsFixed(0)} USD',
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          minimumSize: const Size(148, 44),
+                        ),
+                        onPressed: room.isAvailable
+                            ? () async {
+                                await Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => RoomDetailScreen(
+                                      api: widget.api,
+                                      hotel: hotel,
+                                      room: room,
+                                    ),
+                                  ),
+                                );
+                                _loadData();
+                              }
+                            : null,
+                        icon: const Icon(Icons.arrow_forward_ios_rounded, size: 15),
+                        label: const Text('Ver Detalles'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _categoryPill(IconData icon, String label, bool isSelected) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      decoration: BoxDecoration(
+        color: isSelected ? AppTheme.warmBeige : AppTheme.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isSelected ? AppTheme.warmBeige : Colors.white.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 16,
+            color: isSelected ? const Color(0xFF1E1B18) : AppTheme.textSecondary,
+          ),
+          const SizedBox(width: 7),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+              color: isSelected ? const Color(0xFF1E1B18) : AppTheme.textPrimary,
             ),
           ),
         ],
