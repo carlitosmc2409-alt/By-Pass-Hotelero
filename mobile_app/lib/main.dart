@@ -80,7 +80,7 @@ class _StayPassAppState extends State<StayPassApp> {
       valueListenable: AppTheme.themeMode,
       builder: (context, currentMode, _) {
         return MaterialApp(
-          title: 'StayPass QR',
+          title: 'StayPass',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,

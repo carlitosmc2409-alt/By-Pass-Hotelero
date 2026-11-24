@@ -34,15 +34,15 @@ async function sendWelcomeEmail({ to, name, role = 'Huésped' }) {
   <body>
     <div class="container">
       <div class="header">
-        <div class="brand">By Pass Hotelero (StayPass)</div>
+        <div class="brand">StayPass</div>
       </div>
       <div class="badge">Cuenta Creada</div>
       <h2>¡Bienvenido, ${name}!</h2>
-      <p>Tu cuenta como <strong>${role}</strong> ha sido configurada exitosamente en el sistema de gestión hotelera y control de acceso inteligente.</p>
-      <p>Ahora puedes acceder a la plataforma, gestionar reservas, consultar habitaciones y activar llaves de acceso digital por código QR.</p>
+      <p>Tu cuenta como <strong>${role}</strong> ha sido configurada exitosamente en StayPass, el sistema de acceso inteligente y gestión hotelera sin fricción.</p>
+      <p>Ahora puedes acceder a la plataforma, gestionar tus reservas y generar tu llave de acceso digital por código QR.</p>
       <p>Si tienes alguna duda o necesitas asistencia, estamos para ayudarte.</p>
       <div class="footer">
-        © ${new Date().getFullYear()} StayPass / By Pass Hotelero. Todos los derechos reservados.
+        © ${new Date().getFullYear()} StayPass · Tu habitación sin esperas ni preguntas. Todos los derechos reservados.
       </div>
     </div>
   </body>
@@ -94,10 +94,10 @@ async function sendPasswordResetEmail({ to, name, resetUrl, code }) {
   <body>
     <div class="container">
       <div class="header">
-        <div class="brand">By Pass Hotelero (StayPass)</div>
+        <div class="brand">StayPass</div>
       </div>
       <h2>Recuperación de Contraseña</h2>
-      <p>Hola, ${name}. Hemos recibido una solicitud para restablecer la contraseña de tu cuenta.</p>
+      <p>Hola, ${name}. Hemos recibido una solicitud para restablecer la contraseña de tu cuenta StayPass.</p>
       
       <div class="code-box">
         <div style="font-size: 13px; color: #94a3b8; margin-bottom: 8px;">Tu código de seguridad:</div>
@@ -108,7 +108,7 @@ async function sendPasswordResetEmail({ to, name, resetUrl, code }) {
 
       <p class="warning">⚠️ Este código expirará en 15 minutos. Si no solicitaste este cambio, puedes ignorar este correo de forma segura.</p>
       <div class="footer">
-        © ${new Date().getFullYear()} StayPass / By Pass Hotelero. Todos los derechos reservados.
+        © ${new Date().getFullYear()} StayPass · Tu habitación sin esperas ni preguntas. Todos los derechos reservados.
       </div>
     </div>
   </body>

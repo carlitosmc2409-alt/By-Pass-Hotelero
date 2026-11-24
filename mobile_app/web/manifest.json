@@ -1,11 +1,11 @@
 {
-    "name": "pms_guest_app",
-    "short_name": "pms_guest_app",
+    "name": "StayPass",
+    "short_name": "StayPass",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Tu habitación sin esperas ni preguntas.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

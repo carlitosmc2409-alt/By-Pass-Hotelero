@@ -1,11 +1,11 @@
 {
-    "name": "pms_owner_panel",
-    "short_name": "pms_owner_panel",
+    "name": "StayPass · Panel del Propietario",
+    "short_name": "StayPass Panel",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "StayPass · Panel de Control y Gestión Hotelera.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

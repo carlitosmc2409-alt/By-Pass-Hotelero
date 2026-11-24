@@ -330,18 +330,18 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                         const SizedBox(height: 14),
                         Text(
-                          'StayPass QR',
+                          'StayPass',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 26,
+                            fontSize: 28,
                             fontWeight: FontWeight.w800,
-                            letterSpacing: -0.3,
+                            letterSpacing: -0.5,
                             color: AppTheme.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          'Reserva rápida y discreta · Pago Móvil automático · Llave QR para barrera y habitación.',
+                          'Tu habitación sin esperas ni preguntas · Pago Móvil directo · Llave digital instantánea.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: AppTheme.textSecondary,

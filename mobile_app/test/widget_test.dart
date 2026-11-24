@@ -13,7 +13,7 @@ void main() {
     await tester.pumpWidget(const StayPassApp());
     await tester.pump();
 
-    expect(find.text('StayPass QR'), findsOneWidget);
+    expect(find.text('StayPass'), findsOneWidget);
     expect(find.text('Iniciar sesión'), findsOneWidget);
     expect(find.text('Crear cuenta'), findsOneWidget);
     expect(AppTheme.themeMode.value, ThemeMode.dark);
