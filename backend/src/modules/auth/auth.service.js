@@ -8,6 +8,7 @@ const { hashValue, generateOtp } = require('../../utils/crypto')
 const { encryptField, decryptField, maskTail } = require('../../utils/fieldCrypto')
 const { bankName } = require('../../utils/banks')
 const { sendWhatsAppOtp } = require('../../utils/whatsapp')
+const { sendWelcomeEmail, sendPasswordResetEmail } = require('../../services/email.service')
 
 // ── GUEST AUTH ────────────────────────────────────────────────
 
@@ -238,6 +239,15 @@ async function registerOwner(data) {
   const owner = await prisma.owner.create({
     data: { fullName, email, phone, cedula, passwordHash },
     select: { id: true, fullName: true, email: true, createdAt: true },
+  })
+
+  // Enviar correo de bienvenida asíncrono
+  sendWelcomeEmail({
+    to: owner.email,
+    name: owner.fullName,
+    role: 'Propietario de Hotel',
+  }).catch(err => {
+    console.error('[AuthService] Error enviando bienvenida por email:', err.message)
   })
 
   return {
@@ -517,6 +527,76 @@ async function requestOtp(phone, purpose) {
   return { message: `Código OTP enviado a ${phone.slice(0, 6)}****` }
 }
 
+/**
+ * Solicitar código de recuperación de contraseña por email (Resend)
+ */
+async function requestPasswordReset(email) {
+  const owner = await prisma.owner.findUnique({ where: { email } })
+  if (!owner) {
+    return { message: 'Si el correo está registrado, recibirás un enlace de recuperación en breve.' }
+  }
+
+  const rawCode = generateOtp(6)
+  const codeHash = hashValue(rawCode)
+  const expiresAt = dayjs().add(15, 'minute').toDate()
+
+  await prisma.otpCode.create({
+    data: {
+      phone: email,
+      code: rawCode,
+      codeHash,
+      purpose: 'PASSWORD_RESET',
+      expiresAt,
+    },
+  })
+
+  await sendPasswordResetEmail({
+    to: owner.email,
+    name: owner.fullName,
+    code: rawCode,
+    resetUrl: `https://by-pass-hotelero.vercel.app/reset-password?email=${encodeURIComponent(owner.email)}&code=${rawCode}`,
+  })
+
+  return { message: 'Si el correo está registrado, recibirás un enlace de recuperación en breve.' }
+}
+
+/**
+ * Restablecer contraseña con código de recuperación
+ */
+async function resetPassword(email, code, newPassword) {
+  const codeHash = hashValue(code)
+
+  const otp = await prisma.otpCode.findFirst({
+    where: {
+      phone: email,
+      codeHash,
+      purpose: 'PASSWORD_RESET',
+      isUsed: false,
+      expiresAt: { gt: new Date() },
+    },
+  })
+
+  if (!otp) {
+    const error = new Error('Código de recuperación inválido o expirado')
+    error.statusCode = 400
+    throw error
+  }
+
+  await prisma.otpCode.update({
+    where: { id: otp.id },
+    data: { isUsed: true },
+  })
+
+  const passwordHash = await bcrypt.hash(newPassword, env.BCRYPT_ROUNDS)
+
+  await prisma.owner.update({
+    where: { email },
+    data: { passwordHash },
+  })
+
+  return { message: 'Contraseña actualizada exitosamente. Ya puedes iniciar sesión.' }
+}
+
 module.exports = {
   registerGuest,
   updateGuestPaymentProfile,
@@ -530,4 +610,6 @@ module.exports = {
   refreshAccessToken,
   revokeRefreshToken,
   requestOtp,
+  requestPasswordReset,
+  resetPassword,
 }

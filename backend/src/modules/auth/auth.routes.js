@@ -53,6 +53,13 @@ async function authRoutes(fastify) {
   // ── Recepcionista / Asistencia al Huésped ──
   // POST /api/v1/auth/receptionist/login
   fastify.post('/receptionist/login', ctrl.handleLoginReceptionist)
+
+  // ── Recuperación de Contraseña por Correo (Resend) ─────────
+  // POST /api/v1/auth/forgot-password
+  fastify.post('/forgot-password', ctrl.handleForgotPassword)
+
+  // POST /api/v1/auth/reset-password
+  fastify.post('/reset-password', ctrl.handleResetPassword)
 }
 
 module.exports = authRoutes

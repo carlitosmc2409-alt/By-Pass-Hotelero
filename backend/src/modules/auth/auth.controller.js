@@ -139,6 +139,29 @@ async function handleLoginReceptionist(request, reply) {
   return reply.send(result)
 }
 
+// ── RECUPERACIÓN DE CONTRASEÑA (EMAIL RESEND) ─────────────────
+
+async function handleForgotPassword(request, reply) {
+  const { email } = request.body || {}
+  if (!email) {
+    return reply.status(400).send({ message: 'El email es requerido' })
+  }
+  const result = await authService.requestPasswordReset(email)
+  return reply.send(result)
+}
+
+async function handleResetPassword(request, reply) {
+  const { email, code, newPassword } = request.body || {}
+  if (!email || !code || !newPassword) {
+    return reply.status(400).send({ message: 'email, code y newPassword son requeridos' })
+  }
+  if (newPassword.length < 8) {
+    return reply.status(400).send({ message: 'La nueva contraseña debe tener al menos 8 caracteres' })
+  }
+  const result = await authService.resetPassword(email, code, newPassword)
+  return reply.send(result)
+}
+
 module.exports = {
   handleRegisterGuest,
   handleVerifyOtp,
@@ -154,4 +177,6 @@ module.exports = {
   handleOwnerProfile,
   handleLoginCleaning,
   handleLoginReceptionist,
+  handleForgotPassword,
+  handleResetPassword,
 }

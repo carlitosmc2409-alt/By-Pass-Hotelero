@@ -53,6 +53,10 @@ const env = {
   AWS_REGION: process.env.AWS_REGION || 'us-east-1',
   AWS_S3_BUCKET: process.env.AWS_S3_BUCKET,
 
+  // Resend Email Service
+  RESEND_API_KEY: process.env.RESEND_API_KEY || '',
+  EMAIL_FROM: process.env.EMAIL_FROM || 'StayPass <onboarding@resend.dev>',
+
   isProd: () => process.env.NODE_ENV === 'production',
   isDev: () => process.env.NODE_ENV === 'development',
 }
