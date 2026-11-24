@@ -109,6 +109,53 @@ class BdvNotificationListenerService : NotificationListenerService() {
         }
 
         /**
+         * Envía un heartbeat periódico al backend para notificar que el teléfono
+         * del propietario sigue activo y reportando pagos.
+         */
+        fun sendHeartbeat(context: Context) {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val apiBaseUrl = prefs.getString("apiBaseUrl", null)?.trim()?.trimEnd('/') ?: ""
+            val hotelId = prefs.getString("hotelId", null)?.trim() ?: ""
+            val bridgeToken = prefs.getString("bridgeToken", null)?.trim() ?: ""
+            val enabled = prefs.getBoolean("enabled", false)
+
+            if (apiBaseUrl.isEmpty() || hotelId.isEmpty() || bridgeToken.isEmpty() || !enabled) return
+
+            var conn: HttpURLConnection? = null
+            try {
+                val endpoint = URL("$apiBaseUrl/payments/webhook/bdv-bridge/heartbeat")
+                conn = (endpoint.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 5000
+                    readTimeout = 8000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("x-hotel-bridge-token", bridgeToken)
+                }
+
+                val payload = JSONObject().apply {
+                    put("hotelId", hotelId)
+                    put("pendingQueueCount", getPendingQueueCount(context))
+                    put("forwardedCount", prefs.getInt("forwardedCount", 0))
+                    put("version", "StayPass-BDV-Bridge-2.0")
+                }
+
+                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+                    writer.write(payload.toString())
+                    writer.flush()
+                }
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    val nowStamp = SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault()).format(Date())
+                    prefs.edit().putString("lastHeartbeatAt", nowStamp).apply()
+                }
+            } catch (_: Exception) {
+            } finally {
+                conn?.disconnect()
+            }
+        }
+
+        /**
          * Envía el evento al backend. Retorna `true` si el servidor respondió definitivamente
          * (2xx o 4xx no recuperable), o `false` si hubo caída de red / timeout / HTTP 5xx
          * para que se reintente desde la cola offline.
@@ -170,17 +217,26 @@ class BdvNotificationListenerService : NotificationListenerService() {
                         .putString("lastError", "")
                         .apply()
                     true
-                } else if (status >= 500 || status == 429) {
+                } else if (status in listOf(401, 403, 404) || status >= 500 || status == 429) {
+                    // Errores de credenciales, red o caída de servidor: CONSERVAR en cola para no perder pagos reales
+                    Log.w(TAG, "Error recuperable HTTP $status, conservando en cola offline")
                     prefs.edit()
-                        .putString("lastError", "Servidor ocupado HTTP $status · En cola offline ($nowStamp)")
+                        .putString("lastError", "Error HTTP $status · Conservado en cola offline para reintento ($nowStamp)")
                         .apply()
                     false
+                } else if (status in listOf(400, 422)) {
+                    // Payload con formato no bancario o datos descartables
+                    Log.w(TAG, "Webhook devolvio HTTP $status (descartable): $responseBody")
+                    prefs.edit()
+                        .putString("lastError", "Descartado por formato no procesable HTTP $status ($nowStamp)")
+                        .apply()
+                    true
                 } else {
                     Log.w(TAG, "Webhook devolvio HTTP $status: $responseBody")
                     prefs.edit()
                         .putString("lastError", "HTTP $status al enviar push BDV ($nowStamp)")
                         .apply()
-                    true
+                    false
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Sin red al enviar push BDV, encolando offline", e)
@@ -198,6 +254,8 @@ class BdvNotificationListenerService : NotificationListenerService() {
 
     override fun onCreate() {
         super.onCreate()
+        showOngoingBridgeNotification()
+
         // Reintento automático cada 20 segundos si existen notificaciones en cola offline
         scheduler.scheduleWithFixedDelay(
             {
@@ -211,6 +269,34 @@ class BdvNotificationListenerService : NotificationListenerService() {
             20,
             TimeUnit.SECONDS
         )
+
+        // Heartbeat periódico cada 45 segundos para mantener canal caliente y telemetría de vida
+        scheduler.scheduleWithFixedDelay(
+            {
+                runCatching {
+                    sendHeartbeat(applicationContext)
+                }
+            },
+            5,
+            45,
+            TimeUnit.SECONDS
+        )
+    }
+
+    private fun showOngoingBridgeNotification() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val channelId = "staypass_bdv_bridge"
+            val channel = android.app.NotificationChannel(
+                channelId,
+                "StayPass · Puente Pago Móvil BDV",
+                android.app.NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Monitorea pagos de Banco de Venezuela en segundo plano para auto-check-in"
+                setShowBadge(false)
+            }
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+            manager?.createNotificationChannel(channel)
+        }
     }
 
     override fun onDestroy() {
@@ -236,7 +322,7 @@ class BdvNotificationListenerService : NotificationListenerService() {
         val hotelId = prefs.getString("hotelId", null)?.trim() ?: ""
         val bridgeToken = prefs.getString("bridgeToken", null)?.trim() ?: ""
         val apiBaseUrl = prefs.getString("apiBaseUrl", null)?.trim()?.trimEnd('/') ?: ""
-        val allowTestSources = prefs.getBoolean("allowTestSources", true)
+        val allowTestSources = prefs.getBoolean("allowTestSources", false)
 
         if (hotelId.isEmpty() || bridgeToken.isEmpty() || apiBaseUrl.isEmpty()) {
             return

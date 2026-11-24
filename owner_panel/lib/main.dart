@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'core/owner_api.dart';
 import 'core/owner_theme.dart';
@@ -5,8 +6,9 @@ import 'screens/cleaning_board_screen.dart';
 import 'screens/owner_dashboard_screen.dart';
 import 'screens/owner_login_screen.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await OwnerTheme.loadSavedTheme();
   runApp(const OwnerPanelApp());
 }
 
@@ -24,7 +26,7 @@ class _OwnerPanelAppState extends State<OwnerPanelApp> {
   @override
   void initState() {
     super.initState();
-    _restoreSavedSession();
+    unawaited(_restoreSavedSession());
   }
 
   Future<void> _restoreSavedSession() async {
@@ -43,24 +45,31 @@ class _OwnerPanelAppState extends State<OwnerPanelApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'StayPass · Panel del Propietario',
-      debugShowCheckedModeBanner: false,
-      theme: OwnerTheme.theme,
-      home: !_authenticated
-          ? OwnerLoginScreen(
-              api: _api,
-              onAuthenticated: () => setState(() => _authenticated = true),
-            )
-          : _api.isCleaningRole
-              ? CleaningBoardScreen(
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: OwnerTheme.themeMode,
+      builder: (context, currentMode, _) {
+        return MaterialApp(
+          title: 'StayPass · Panel del Propietario',
+          debugShowCheckedModeBanner: false,
+          theme: OwnerTheme.lightTheme,
+          darkTheme: OwnerTheme.darkTheme,
+          themeMode: currentMode,
+          home: !_authenticated
+              ? OwnerLoginScreen(
                   api: _api,
-                  onLogout: _handleLogout,
+                  onAuthenticated: () => setState(() => _authenticated = true),
                 )
-              : OwnerDashboardScreen(
-                  api: _api,
-                  onLogout: _handleLogout,
-                ),
+              : _api.isCleaningRole
+                  ? CleaningBoardScreen(
+                      api: _api,
+                      onLogout: _handleLogout,
+                    )
+                  : OwnerDashboardScreen(
+                      api: _api,
+                      onLogout: _handleLogout,
+                    ),
+        );
+      },
     );
   }
 }

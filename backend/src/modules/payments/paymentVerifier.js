@@ -128,31 +128,44 @@ function verifyPayerMatchesGuest(bankEvent, guest) {
  * - Extensión (`EXTENSION_OF:<parentId>`): amplía `checkOut`, `durationHours`, `totalAmount` y vigencia QR.
  * - Room Service (`ROOM_SERVICE_OF:<parentId>|<json>`): habilita orden de entrega en esclusa/pasaplatos.
  */
-async function activateApprovedPaymentInTx(tx, { payment, reservation, confirmedBy, matchingEventId = null }) {
+async function activateApprovedPaymentInTx(tx, { payment, reservation, confirmedBy, matchingEventId = null, manualData = null }) {
   const prevMeta = (payment.metadata && typeof payment.metadata === 'object')
     ? payment.metadata
     : {}
   const roomServiceInfo = parseRoomServiceNote(reservation.notes)
 
+  const updatedMetadata = {
+    ...prevMeta,
+    ...(manualData?.notes ? { manualNotes: manualData.notes } : {}),
+    ...(manualData?.reason ? { contingencyReason: manualData.reason } : {}),
+    ...(roomServiceInfo
+      ? {
+          isRoomService: true,
+          parentReservationId: roomServiceInfo.parentReservationId,
+          items: roomServiceInfo.items,
+          guestNote: roomServiceInfo.guestNote,
+          deliveryStatus: 'PENDING_DELIVERY',
+        }
+      : {}),
+  }
+
+  const updatePayload = {
+    status: 'APPROVED',
+    confirmedAt: new Date(),
+    confirmedBy,
+    metadata: updatedMetadata,
+  }
+
+  if (manualData?.gateway) {
+    updatePayload.gateway = manualData.gateway
+  }
+  if (manualData?.gatewayRef) {
+    updatePayload.gatewayRef = normalizeRef(manualData.gatewayRef)
+  }
+
   await tx.payment.update({
     where: { id: payment.id },
-    data: {
-      status: 'APPROVED',
-      confirmedAt: new Date(),
-      confirmedBy,
-      ...(roomServiceInfo
-        ? {
-            metadata: {
-              ...prevMeta,
-              isRoomService: true,
-              parentReservationId: roomServiceInfo.parentReservationId,
-              items: roomServiceInfo.items,
-              guestNote: roomServiceInfo.guestNote,
-              deliveryStatus: 'PENDING_DELIVERY',
-            },
-          }
-        : {}),
-    },
+    data: updatePayload,
   })
 
   if (matchingEventId) {
@@ -554,6 +567,8 @@ async function recordBankEvent(input) {
 
 module.exports = {
   normalizeRef,
+  normalizeVePhone,
+  referencesMatch,
   parseBdvNotificationText,
   activateApprovedPaymentInTx,
   broadcastActivationEvents,

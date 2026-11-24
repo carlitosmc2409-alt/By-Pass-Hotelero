@@ -67,35 +67,45 @@ class RoomModel {
   final String id;
   final String name;
   final String type;
+  final String? description;
   final double pricePerHour;
   final double pricePerNight;
   final String currency;
   final List<String> amenities;
+  final List<String> photos;
   final String status;
 
   const RoomModel({
     required this.id,
     required this.name,
     required this.type,
+    this.description,
     required this.pricePerHour,
     required this.pricePerNight,
     required this.currency,
     required this.amenities,
+    this.photos = const [],
     required this.status,
   });
 
   bool get isAvailable => status == 'AVAILABLE';
+  String? get coverPhoto => photos.isNotEmpty ? photos.first : null;
 
   factory RoomModel.fromJson(Map<String, dynamic> json) {
     return RoomModel(
       id: (json['id'] as String?) ?? '',
       name: (json['name'] as String?) ?? '',
       type: (json['type'] as String?) ?? 'STANDARD',
+      description: json['description'] as String?,
       pricePerHour: double.tryParse(json['pricePerHour']?.toString() ?? '') ?? 10,
       pricePerNight: double.tryParse(json['pricePerNight']?.toString() ?? '') ?? 50,
       currency: (json['currency'] as String?) ?? 'USD',
       amenities: (json['amenities'] as List<dynamic>? ?? [])
           .map((e) => e.toString())
+          .toList(),
+      photos: (json['photos'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .where((s) => s.isNotEmpty)
           .toList(),
       status: (json['status'] as String?) ?? 'AVAILABLE',
     );
@@ -107,7 +117,14 @@ class HotelModel {
   final String name;
   final String address;
   final String city;
+  final double? latitude;
+  final double? longitude;
+  final double rating;
+  final int reviewsCount;
+  final List<Map<String, dynamic>> reviews;
   final String? description;
+  final String? coverPhoto;
+  final List<String> photos;
   final bool faacEnabled;
   final List<RoomModel> rooms;
 
@@ -116,19 +133,48 @@ class HotelModel {
     required this.name,
     required this.address,
     required this.city,
+    this.latitude,
+    this.longitude,
+    this.rating = 4.8,
+    this.reviewsCount = 40,
+    this.reviews = const [],
     this.description,
+    this.coverPhoto,
+    this.photos = const [],
     this.faacEnabled = true,
     this.rooms = const [],
   });
 
+  String? get effectiveCoverPhoto =>
+      (coverPhoto != null && coverPhoto!.isNotEmpty)
+          ? coverPhoto
+          : (photos.isNotEmpty ? photos.first : null);
+
   factory HotelModel.fromJson(Map<String, dynamic> json) {
     final roomsJson = json['rooms'] as List<dynamic>? ?? [];
+    final reviewsJson = (json['reviews'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
+
     return HotelModel(
       id: (json['id'] as String?) ?? '',
       name: (json['name'] as String?) ?? 'Hotel',
       address: (json['address'] as String?) ?? '',
       city: (json['city'] as String?) ?? '',
+      latitude: json['latitude'] != null
+          ? double.tryParse(json['latitude'].toString())
+          : 10.4806,
+      longitude: json['longitude'] != null
+          ? double.tryParse(json['longitude'].toString())
+          : -66.9036,
+      rating: double.tryParse(json['rating']?.toString() ?? '') ?? 4.8,
+      reviewsCount: (json['reviewsCount'] as num?)?.toInt() ?? 40,
+      reviews: reviewsJson,
       description: json['description'] as String?,
+      coverPhoto: json['coverPhoto'] as String?,
+      photos: (json['photos'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .where((s) => s.isNotEmpty)
+          .toList(),
       faacEnabled: json['faacEnabled'] != false,
       rooms: roomsJson
           .map((r) => RoomModel.fromJson(r as Map<String, dynamic>))
@@ -245,8 +291,8 @@ class GuestReservationSummary {
       paymentId: pay['id'] as String,
       totalAmount: totalAmount,
       currency: currency,
-      amountVes: double.tryParse(pay['amountVes']?.toString() ?? '') ?? totalAmount,
-      exchangeRate: double.tryParse(pay['exchangeRate']?.toString() ?? '') ?? 50.0,
+      amountVes: double.tryParse(pay['amountVes']?.toString() ?? '') ?? 0.0,
+      exchangeRate: double.tryParse(pay['exchangeRate']?.toString() ?? '') ?? 0.0,
       paymentExpiresAt: expiresAt,
       receptorPagoMovil: hotelPaymentInfo,
       checkIn: checkIn,
@@ -358,6 +404,7 @@ class QrAccessData {
   final String hotelName;
   final String roomName;
   final Map<String, dynamic> faac;
+  final bool isOfflineCached;
 
   const QrAccessData({
     required this.qrDataUrl,
@@ -368,6 +415,7 @@ class QrAccessData {
     required this.hotelName,
     required this.roomName,
     this.faac = const {},
+    this.isOfflineCached = false,
   });
 
   bool get faacEnabled => faac['enabled'] != false;
@@ -377,6 +425,18 @@ class QrAccessData {
       (faac['entryDeviceId'] ?? 'faac-entrada-1').toString();
   String get faacExitDevice =>
       (faac['exitDeviceId'] ?? 'faac-salida-1').toString();
+
+  Map<String, dynamic> toJson() => {
+        'qrDataUrl': qrDataUrl,
+        'rawToken': rawToken,
+        'validFrom': validFrom.toIso8601String(),
+        'validUntil': validUntil.toIso8601String(),
+        'hotelId': hotelId,
+        'hotelName': hotelName,
+        'roomName': roomName,
+        'faac': faac,
+        'isOfflineCached': isOfflineCached,
+      };
 
   factory QrAccessData.fromJson(Map<String, dynamic> json) {
     return QrAccessData(
@@ -388,6 +448,7 @@ class QrAccessData {
       hotelName: json['hotelName'] as String,
       roomName: json['roomName'] as String,
       faac: (json['faac'] as Map<String, dynamic>?) ?? const {},
+      isOfflineCached: json['isOfflineCached'] == true,
     );
   }
 }

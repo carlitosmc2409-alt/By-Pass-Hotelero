@@ -1,12 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'core/api_client.dart';
 import 'core/theme.dart';
 import 'screens/auth_screen.dart';
 import 'screens/hotels_screen.dart';
+import 'screens/receptionist_dashboard_screen.dart';
+import 'screens/cleaning_dashboard_screen.dart';
 import 'screens/stealth_screen.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AppTheme.loadSavedTheme();
   runApp(const StayPassApp());
 }
 
@@ -24,7 +28,7 @@ class _StayPassAppState extends State<StayPassApp> {
   @override
   void initState() {
     super.initState();
-    _restoreSavedSession();
+    unawaited(_restoreSavedSession());
   }
 
   Future<void> _restoreSavedSession() async {
@@ -34,39 +38,74 @@ class _StayPassAppState extends State<StayPassApp> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'StayPass QR',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.darkTheme,
-      builder: (context, child) {
-        return ValueListenableBuilder<bool>(
-          valueListenable: StealthCalculatorScreen.active,
-          builder: (context, isStealth, _) {
-            if (isStealth) {
-              return StealthCalculatorScreen(
-                onUnlock: StealthCalculatorScreen.disable,
-              );
+  Widget _buildAuthenticatedHome() {
+    switch (_api.currentRole) {
+      case 'RECEPTIONIST':
+        return ReceptionistDashboardScreen(
+          api: _api,
+          onLogout: () async {
+            await _api.logout();
+            if (mounted) {
+              setState(() => _authenticated = false);
             }
-            return child ?? const SizedBox.shrink();
           },
         );
-      },
-      home: _authenticated
-          ? HotelsScreen(
-              api: _api,
-              onLogout: () async {
-                await _api.logout();
-                if (mounted) {
-                  setState(() => _authenticated = false);
+      case 'CLEANING':
+        return CleaningDashboardScreen(
+          api: _api,
+          onLogout: () async {
+            await _api.logout();
+            if (mounted) {
+              setState(() => _authenticated = false);
+            }
+          },
+        );
+      case 'GUEST':
+      default:
+        return HotelsScreen(
+          api: _api,
+          onLogout: () async {
+            await _api.logout();
+            if (mounted) {
+              setState(() => _authenticated = false);
+            }
+          },
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: AppTheme.themeMode,
+      builder: (context, currentMode, _) {
+        return MaterialApp(
+          title: 'StayPass QR',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.lightTheme,
+          darkTheme: AppTheme.darkTheme,
+          themeMode: currentMode,
+          builder: (context, child) {
+            return ValueListenableBuilder<bool>(
+              valueListenable: StealthCalculatorScreen.active,
+              builder: (context, isStealth, _) {
+                if (isStealth) {
+                  return const StealthCalculatorScreen(
+                    onUnlock: StealthCalculatorScreen.disable,
+                  );
                 }
+                return child ?? const SizedBox.shrink();
               },
-            )
-          : AuthScreen(
-              api: _api,
-              onAuthenticated: () => setState(() => _authenticated = true),
-            ),
+            );
+          },
+          home: _authenticated
+              ? _buildAuthenticatedHome()
+              : AuthScreen(
+                  api: _api,
+                  onAuthenticated: () => setState(() => _authenticated = true),
+                ),
+        );
+      },
     );
   }
 }

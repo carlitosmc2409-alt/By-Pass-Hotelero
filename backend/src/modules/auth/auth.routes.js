@@ -49,6 +49,10 @@ async function authRoutes(fastify) {
   // ── Personal Operativo / Limpieza (sin acceso financiero) ──
   // POST /api/v1/auth/cleaning/login
   fastify.post('/cleaning/login', ctrl.handleLoginCleaning)
+
+  // ── Recepcionista / Asistencia al Huésped ──
+  // POST /api/v1/auth/receptionist/login
+  fastify.post('/receptionist/login', ctrl.handleLoginReceptionist)
 }
 
 module.exports = authRoutes

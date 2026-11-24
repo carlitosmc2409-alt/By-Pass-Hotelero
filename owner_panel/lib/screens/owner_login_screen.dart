@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../core/owner_api.dart';
 import '../core/owner_theme.dart';
@@ -18,12 +19,22 @@ class OwnerLoginScreen extends StatefulWidget {
 
 class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
   bool _isCleaningMode = false;
-  final _emailCtrl = TextEditingController(text: 'propietario@test.com');
-  final _passwordCtrl = TextEditingController(text: 'Admin@12345');
+  bool _obscurePassword = true;
+  bool _obscurePin = true;
+  final _emailCtrl = TextEditingController(
+    text: kDebugMode ? 'propietario@test.com' : '',
+  );
+  final _passwordCtrl = TextEditingController(
+    text: kDebugMode ? 'Admin@12345' : '',
+  );
 
   final _hotelCodeCtrl = TextEditingController();
-  final _aliasCtrl = TextEditingController(text: 'camarera1');
-  final _pinCtrl = TextEditingController(text: '1234');
+  final _aliasCtrl = TextEditingController(
+    text: kDebugMode ? 'camarera1' : '',
+  );
+  final _pinCtrl = TextEditingController(
+    text: kDebugMode ? '1234' : '',
+  );
 
   bool _loading = false;
   String? _error;
@@ -43,7 +54,6 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
     final saved = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: OwnerTheme.card,
         title: const Text('Servidor API StayPass'),
         content: TextField(
           controller: ctrl,
@@ -89,7 +99,7 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
         );
       }
       widget.onAuthenticated();
-    } catch (e) {
+    } on Object catch (e) {
       if (mounted) {
         setState(() => _error = e.toString());
       }
@@ -103,84 +113,79 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.7),
-            radius: 1.25,
-            colors: [
-              Color(0xFF1A1711),
-              Color(0xFF0C101C),
-              OwnerTheme.background,
-            ],
-          ),
-        ),
+      backgroundColor: OwnerTheme.background,
+      body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 440),
+              constraints: const BoxConstraints(maxWidth: 430),
               child: Card(
                 child: Padding(
-                  padding: const EdgeInsets.all(28),
+                  padding: const EdgeInsets.all(26),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton.icon(
-                          onPressed: _openServerUrlDialog,
-                          icon: const Icon(
-                            Icons.dns_outlined,
-                            size: 16,
-                            color: OwnerTheme.textSecondary,
-                          ),
-                          label: const Text(
-                            'Servidor',
-                            style: TextStyle(
-                              fontSize: 12,
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          TextButton.icon(
+                            onPressed: _openServerUrlDialog,
+                            icon: Icon(
+                              Icons.dns_outlined,
+                              size: 16,
                               color: OwnerTheme.textSecondary,
                             ),
+                            label: Text(
+                              'Servidor',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                color: OwnerTheme.textSecondary,
+                              ),
+                            ),
                           ),
-                        ),
+                          OwnerTheme.themeToggleButton(),
+                        ],
                       ),
+                      const SizedBox(height: 6),
                       Center(
                         child: Container(
-                          width: 66,
-                          height: 66,
+                          width: 62,
+                          height: 62,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             color: OwnerTheme.surface,
                             border: Border.all(
-                              color: OwnerTheme.gold.withValues(alpha: 0.55),
-                              width: 1.4,
+                              color: OwnerTheme.gold.withValues(alpha: 0.45),
+                              width: 1.5,
                             ),
                           ),
                           child: Icon(
                             _isCleaningMode
                                 ? Icons.cleaning_services_rounded
                                 : Icons.apartment_rounded,
-                            size: 32,
+                            size: 30,
                             color: OwnerTheme.gold,
                           ),
                         ),
                       ),
                       const SizedBox(height: 16),
-                      const Text(
+                      Text(
                         'StayPass · Panel del Propietario',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w800,
+                          color: OwnerTheme.textPrimary,
                         ),
                       ),
                       const SizedBox(height: 6),
                       Text(
                         _isCleaningMode
-                            ? 'Modo Operativo de Camareras · Cero acceso a finanzas ni datos personales.'
-                            : 'Control ejecutivo en vivo: BDV Cero-Clics, Barreras FAAC, Pasaplatos y Ocupación.',
+                            ? 'Modo Operativo de Limpieza · Sin acceso a finanzas ni datos personales.'
+                            : 'Gestión simple de suites, ingresos Pago Móvil y control de barreras.',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 13,
                           color: OwnerTheme.textSecondary,
                         ),
@@ -191,12 +196,13 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
                         decoration: BoxDecoration(
                           color: OwnerTheme.surface,
                           borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: OwnerTheme.border),
                         ),
                         child: Row(
                           children: [
                             Expanded(
                               child: _roleChip(
-                                label: 'Gerencia / Dueño',
+                                label: 'Dueño / Gerencia',
                                 selected: !_isCleaningMode,
                                 onTap: () => setState(() {
                                   _isCleaningMode = false;
@@ -230,10 +236,25 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
                         const SizedBox(height: 14),
                         TextField(
                           controller: _passwordCtrl,
-                          obscureText: true,
-                          decoration: const InputDecoration(
+                          obscureText: _obscurePassword,
+                          decoration: InputDecoration(
                             labelText: 'Contraseña',
-                            prefixIcon: Icon(Icons.lock_outline),
+                            prefixIcon: const Icon(Icons.lock_outline),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _obscurePassword
+                                    ? Icons.visibility_off_outlined
+                                    : Icons.visibility_outlined,
+                              ),
+                              tooltip: _obscurePassword
+                                  ? 'Mostrar contraseña'
+                                  : 'Ocultar contraseña',
+                              onPressed: () {
+                                setState(() {
+                                  _obscurePassword = !_obscurePassword;
+                                });
+                              },
+                            ),
                           ),
                           onSubmitted: (_) => _login(),
                         ),
@@ -248,11 +269,26 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
                         const SizedBox(height: 14),
                         TextField(
                           controller: _pinCtrl,
-                          obscureText: true,
+                          obscureText: _obscurePin,
                           keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             labelText: 'PIN de acceso (ej: 1234)',
-                            prefixIcon: Icon(Icons.pin_outlined),
+                            prefixIcon: const Icon(Icons.pin_outlined),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _obscurePin
+                                    ? Icons.visibility_off_outlined
+                                    : Icons.visibility_outlined,
+                              ),
+                              tooltip: _obscurePin
+                                  ? 'Mostrar PIN'
+                                  : 'Ocultar PIN',
+                              onPressed: () {
+                                setState(() {
+                                  _obscurePin = !_obscurePin;
+                                });
+                              },
+                            ),
                           ),
                           onSubmitted: (_) => _login(),
                         ),
@@ -269,19 +305,19 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
                         const SizedBox(height: 14),
                         Text(
                           _error!,
-                          style: const TextStyle(color: OwnerTheme.occupied),
+                          style: TextStyle(color: OwnerTheme.occupied),
                         ),
                       ],
                       const SizedBox(height: 22),
                       ElevatedButton(
                         onPressed: _loading ? null : _login,
                         child: _loading
-                            ? const SizedBox(
+                            ? SizedBox(
                                 height: 20,
                                 width: 20,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  color: Colors.black,
+                                  color: OwnerTheme.onPrimary,
                                 ),
                               )
                             : Text(
@@ -309,7 +345,7 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
+        duration: const Duration(milliseconds: 160),
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
           color: selected ? OwnerTheme.gold : Colors.transparent,
@@ -321,7 +357,7 @@ class _OwnerLoginScreenState extends State<OwnerLoginScreen> {
           style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.w700,
-            color: selected ? const Color(0xFF08090E) : OwnerTheme.textSecondary,
+            color: selected ? OwnerTheme.onPrimary : OwnerTheme.textSecondary,
           ),
         ),
       ),

@@ -1,5 +1,6 @@
 const cron = require('node-cron')
 const { prisma } = require('../config/database')
+const { emitRealtimeEvent } = require('./eventBus')
 const dayjs = require('dayjs')
 
 /**
@@ -15,10 +16,17 @@ function startCronJobs() {
     )
   })
 
-  // Cada 5 minutos: expirar reservas activas cuyo check-out ya pasó y desactivar QRs
-  cron.schedule('*/5 * * * *', () => {
+  // Cada 1 minuto: expirar reservas activas cuyo check-out ya pasó y poner habitación en CLEANING
+  cron.schedule('* * * * *', () => {
     expireReservations().catch(err =>
       console.error('⚠️ [Cron] Error expirando estadías:', err.message)
+    )
+  })
+
+  // Cada 1 minuto: liberar automáticamente habitaciones en CLEANING tras 30 min desocupadas
+  cron.schedule('* * * * *', () => {
+    autoReleaseCleaningRooms().catch(err =>
+      console.error('⚠️ [Cron] Error en auto-liberación de limpieza:', err.message)
     )
   })
 
@@ -71,7 +79,8 @@ async function expireUnpaidReservations() {
 
 /**
  * Marca como EXPIRED las reservas cuyo check-out ya pasó y siguen ACTIVE.
- * También desactiva sus AccessTokens.
+ * Desactiva sus AccessTokens, coloca la habitación en CLEANING ('Requiere Limpieza')
+ * y emite el evento en tiempo real.
  */
 async function expireReservations() {
   const now = new Date()
@@ -82,12 +91,15 @@ async function expireReservations() {
       status: 'ACTIVE',
       checkOut: { lte: now },
     },
-    select: { id: true },
+    include: {
+      room: { select: { id: true, name: true, hotelId: true } },
+    },
   })
 
-  if (expired.length === 0) return
+  if (expired.length === 0) return { expiredCount: 0 }
 
   const ids = expired.map(r => r.id)
+  const roomIds = [...new Set(expired.map(r => r.roomId))]
 
   await prisma.$transaction([
     // Marcar reservas como expiradas
@@ -102,12 +114,85 @@ async function expireReservations() {
     }),
     // Marcar habitaciones en limpieza tras vencer estadía
     prisma.room.updateMany({
-      where: { reservations: { some: { id: { in: ids } } } },
+      where: { id: { in: roomIds } },
       data: { status: 'CLEANING' },
     }),
   ])
 
-  console.log(`⏰ [Cron] ${ids.length} reservas expiradas procesadas`)
+  // Emitir evento en tiempo real para alertar al panel del propietario y tablero de limpieza
+  for (const res of expired) {
+    emitRealtimeEvent({
+      hotelId: res.room.hotelId,
+      guestId: res.guestId,
+      reservationId: res.id,
+      type: 'ROOM_STATUS_CHANGED',
+      payload: {
+        roomId: res.room.id,
+        roomName: res.room.name,
+        status: 'CLEANING',
+        reason: 'RESERVATION_EXPIRED',
+      },
+      cleaningSafePayload: {
+        roomId: res.room.id,
+        roomName: res.room.name,
+        status: 'CLEANING',
+        reason: 'RESERVATION_EXPIRED',
+      },
+    })
+  }
+
+  console.log(`⏰ [Cron] ${ids.length} estadías vencidas procesadas → Habitaciones en 'Requiere Limpieza'`)
+  return { expiredCount: ids.length }
+}
+
+/**
+ * Pasa automáticamente a AVAILABLE ('Lista') las habitaciones que llevan
+ * 30 minutos o más en estado CLEANING sin que la trabajadora las haya marcado manualmente.
+ */
+async function autoReleaseCleaningRooms() {
+  const threshold = dayjs().subtract(30, 'minute').toDate()
+
+  const roomsToRelease = await prisma.room.findMany({
+    where: {
+      status: 'CLEANING',
+      updatedAt: { lte: threshold },
+    },
+    select: { id: true, name: true, hotelId: true },
+  })
+
+  if (roomsToRelease.length === 0) {
+    return { releasedCount: 0 }
+  }
+
+  const roomIds = roomsToRelease.map(r => r.id)
+
+  await prisma.room.updateMany({
+    where: { id: { in: roomIds } },
+    data: { status: 'AVAILABLE' },
+  })
+
+  // Emitir evento SSE para reflejar disponibilidad inmediata en app huésped y panel
+  for (const r of roomsToRelease) {
+    emitRealtimeEvent({
+      hotelId: r.hotelId,
+      type: 'ROOM_STATUS_CHANGED',
+      payload: {
+        roomId: r.id,
+        roomName: r.name,
+        status: 'AVAILABLE',
+        reason: 'AUTO_CLEANING_TIMEOUT_30MIN',
+      },
+      cleaningSafePayload: {
+        roomId: r.id,
+        roomName: r.name,
+        status: 'AVAILABLE',
+        reason: 'AUTO_CLEANING_TIMEOUT_30MIN',
+      },
+    })
+    console.log(`🧹 [Cron] Habitación ${r.name} colocada automáticamente como 'Lista' (AVAILABLE) tras 30 min desocupada.`)
+  }
+
+  return { releasedCount: roomsToRelease.length }
 }
 
 /**
@@ -146,4 +231,9 @@ async function cleanExpiredRefreshTokens() {
   }
 }
 
-module.exports = { startCronJobs, expireUnpaidReservations, expireReservations }
+module.exports = {
+  startCronJobs,
+  expireUnpaidReservations,
+  expireReservations,
+  autoReleaseCleaningRooms,
+}

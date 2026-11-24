@@ -25,16 +25,21 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
   String? _error;
   Map<String, dynamic>? _board;
   StreamSubscription<Map<String, dynamic>>? _sseSub;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
-    _loadBoard();
+    unawaited(_loadBoard());
     _connectEvents();
+    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted) unawaited(_loadBoard(silent: true));
+    });
   }
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
     _sseSub?.cancel();
     super.dispose();
   }
@@ -53,7 +58,7 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
         'ROOM_SERVICE_ORDER',
         'ROOM_SERVICE_DELIVERED',
       }.contains(type)) {
-        _loadBoard(silent: true);
+        unawaited(_loadBoard(silent: true));
       }
     });
   }
@@ -83,7 +88,7 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
         return;
       }
       if (mounted && !silent) setState(() => _error = e.toString());
-    } catch (e) {
+    } on Object catch (e) {
       if (mounted && !silent) setState(() => _error = e.toString());
     } finally {
       if (mounted && !silent) setState(() => _loading = false);
@@ -99,15 +104,24 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
           backgroundColor: OwnerTheme.available,
           content: Text(
             '✅ Suite $roomName habilitada para nuevas reservas QR.',
-            style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ),
       );
       await _loadBoard(silent: true);
-    } catch (e) {
+    } on Object catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(backgroundColor: OwnerTheme.occupied, content: Text(e.toString())),
+        SnackBar(
+          backgroundColor: OwnerTheme.occupied,
+          content: Text(
+            e.toString(),
+            style: const TextStyle(color: Colors.white),
+          ),
+        ),
       );
     }
   }
@@ -121,15 +135,24 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
           backgroundColor: OwnerTheme.available,
           content: Text(
             '🛎️ Pedido entregado en pasaplatos de Habitación $roomName.',
-            style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ),
       );
       await _loadBoard(silent: true);
-    } catch (e) {
+    } on Object catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(backgroundColor: OwnerTheme.occupied, content: Text(e.toString())),
+        SnackBar(
+          backgroundColor: OwnerTheme.occupied,
+          content: Text(
+            e.toString(),
+            style: const TextStyle(color: Colors.white),
+          ),
+        ),
       );
     }
   }
@@ -138,12 +161,11 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
   Widget build(BuildContext context) {
     final hotel = (_board?['hotel'] as Map<String, dynamic>?) ?? {};
     final summary = (_board?['summary'] as Map<String, dynamic>?) ?? {};
-    final rooms =
-        ((_board?['rooms'] as List<dynamic>?) ?? []).cast<Map<String, dynamic>>();
+    final rooms = ((_board?['rooms'] as List<dynamic>?) ?? [])
+        .cast<Map<String, dynamic>>();
     final deliveries = ((_board?['pendingDeliveries'] as List<dynamic>?) ?? [])
         .cast<Map<String, dynamic>>();
 
-    // Ordenar primero las habitaciones en CLEANING, luego las ocupadas próximas a salir
     final sortedRooms = [...rooms]..sort((a, b) {
         int rank(Map<String, dynamic> r) {
           if (r['status'] == 'CLEANING') return 0;
@@ -159,7 +181,7 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
       appBar: AppBar(
         title: Row(
           children: [
-            const Icon(
+            Icon(
               Icons.cleaning_services_rounded,
               color: OwnerTheme.gold,
               size: 21,
@@ -175,16 +197,19 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: (_sseLive ? OwnerTheme.available : OwnerTheme.textSecondary)
-                    .withValues(alpha: 0.16),
+                color:
+                    (_sseLive ? OwnerTheme.available : OwnerTheme.textSecondary)
+                        .withValues(alpha: 0.16),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
-                _sseLive ? '● EN VIVO' : '● SYNC',
+                _sseLive ? '● En línea' : '● Sync',
                 style: TextStyle(
                   fontSize: 10.5,
                   fontWeight: FontWeight.w800,
-                  color: _sseLive ? OwnerTheme.available : OwnerTheme.textSecondary,
+                  color: _sseLive
+                      ? OwnerTheme.available
+                      : OwnerTheme.textSecondary,
                 ),
               ),
             ),
@@ -194,16 +219,17 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
           if (widget.api.staffName != null)
             Center(
               child: Padding(
-                padding: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.only(right: 6),
                 child: Text(
                   widget.api.staffName!,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12.5,
                     color: OwnerTheme.textSecondary,
                   ),
                 ),
               ),
             ),
+          OwnerTheme.themeToggleButton(),
           IconButton(
             tooltip: 'Actualizar',
             onPressed: () => _loadBoard(),
@@ -223,7 +249,10 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(_error!, style: const TextStyle(color: OwnerTheme.occupied)),
+                      Text(
+                        _error!,
+                        style: TextStyle(color: OwnerTheme.occupied),
+                      ),
                       const SizedBox(height: 12),
                       ElevatedButton(
                         onPressed: _loadBoard,
@@ -242,7 +271,7 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
                         runSpacing: 12,
                         children: [
                           _statPill(
-                            'Por Acondicionar',
+                            'Por Limpiar',
                             '${summary['cleaningCount'] ?? 0}',
                             OwnerTheme.cleaning,
                             Icons.cleaning_services_rounded,
@@ -269,8 +298,8 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
                       ),
                       if (deliveries.isNotEmpty) ...[
                         const SizedBox(height: 22),
-                        const Text(
-                          '🛎️ Pedidos Pagados · Depositar en Pasaplatos / Esclusa',
+                        Text(
+                          '🛎️ Pedidos para entregar en Pasaplatos',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w800,
@@ -289,20 +318,22 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
                               leading: CircleAvatar(
                                 backgroundColor:
                                     OwnerTheme.gold.withValues(alpha: 0.16),
-                                child: const Icon(
+                                child: Icon(
                                   Icons.room_service_rounded,
                                   color: OwnerTheme.gold,
                                 ),
                               ),
                               title: Text(
                                 'Suite ${d['roomName']} · ${(d['items'] as List<dynamic>? ?? []).map((i) => "${i['qty']}x ${i['name']}").join(", ")}',
-                                style: const TextStyle(fontWeight: FontWeight.w700),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                               subtitle: Text(
                                 (d['guestNote']?.toString().isNotEmpty ?? false)
                                     ? 'Nota del huésped: ${d['guestNote']}'
                                     : 'Depositar en esclusa sin tocar la puerta interior',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
                                   color: OwnerTheme.textSecondary,
                                 ),
@@ -310,7 +341,7 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
                               trailing: ElevatedButton.icon(
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: OwnerTheme.available,
-                                  foregroundColor: Colors.black,
+                                  foregroundColor: Colors.white,
                                   minimumSize: const Size(140, 40),
                                 ),
                                 onPressed: () => _deliverOrder(
@@ -318,14 +349,14 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
                                   d['roomName'].toString(),
                                 ),
                                 icon: const Icon(Icons.check_rounded, size: 17),
-                                label: const Text('En Pasaplatos'),
+                                label: const Text('Entregado'),
                               ),
                             ),
                           ),
                       ],
                       const SizedBox(height: 22),
                       const Text(
-                        'Estado Operativo de Habitaciones (Sin Datos Financieros)',
+                        'Estado de Habitaciones',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
@@ -365,7 +396,7 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
               ),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11.5,
                   color: OwnerTheme.textSecondary,
                 ),
@@ -411,22 +442,23 @@ class _CleaningBoardScreenState extends State<CleaningBoardScreen> {
         ),
         subtitle: Text(
           isCleaning
-              ? 'HUÉSPED RETIRADO · Requiere limpieza y reposición de lencería'
+              ? 'Huésped retirado · Requiere limpieza y reposición'
               : isOccupied
                   ? (expiringSoon
-                      ? '⚠️ Salida próxima en ~${mins ?? 0} min · Preparar carrito'
+                      ? '⚠️ Salida próxima en ~${mins ?? 0} min · Preparar limpieza'
                       : 'Ocupada · Tiempo restante estimado: ${mins ?? "--"} min')
                   : 'Lista y habilitada para check-in QR',
           style: TextStyle(
             fontSize: 12.5,
-            color: expiringSoon ? OwnerTheme.cleaning : OwnerTheme.textSecondary,
+            color:
+                expiringSoon ? OwnerTheme.cleaning : OwnerTheme.textSecondary,
           ),
         ),
         trailing: isCleaning
             ? ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: OwnerTheme.available,
-                  foregroundColor: Colors.black,
+                  foregroundColor: Colors.white,
                   minimumSize: const Size(148, 40),
                 ),
                 onPressed: () =>

@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../core/api_client.dart';
 import '../core/theme.dart';
@@ -19,9 +21,11 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
+  String _portalRole = 'GUEST'; // 'GUEST' | 'RECEPTIONIST' | 'CLEANING'
   bool _isLogin = true;
   bool _awaitingOtp = false;
   bool _loading = false;
+  bool _obscurePassword = true;
   String? _error;
   String? _info;
 
@@ -35,17 +39,41 @@ class _AuthScreenState extends State<AuthScreen> {
   ];
   String _selectedBank = '0102';
 
+  // Controladores Huésped
   final _fullNameCtrl = TextEditingController();
-  final _phoneCtrl = TextEditingController(text: '+584129876543');
-  final _cedulaCtrl = TextEditingController(text: 'V-20123456');
+  final _phoneCtrl = TextEditingController(
+    text: kDebugMode ? '+584129876543' : '',
+  );
+  final _cedulaCtrl = TextEditingController(
+    text: kDebugMode ? 'V-20123456' : '',
+  );
   final _paymentPhoneCtrl = TextEditingController();
-  final _passwordCtrl = TextEditingController(text: 'Guest@12345');
+  final _passwordCtrl = TextEditingController(
+    text: kDebugMode ? 'Guest@12345' : '',
+  );
   final _otpCtrl = TextEditingController();
+
+  // Controladores Personal (Recepción y Limpieza)
+  final _hotelCodeCtrl = TextEditingController(
+    text: kDebugMode ? 'motel-la-brisa-caracas' : '',
+  );
+  final _receptionUserCtrl = TextEditingController(
+    text: kDebugMode ? 'juan.recepcion' : '',
+  );
+  final _receptionPassCtrl = TextEditingController(
+    text: kDebugMode ? 'Recepcion2026*' : '',
+  );
+  final _cleaningAliasCtrl = TextEditingController(
+    text: kDebugMode ? 'camarera1' : '',
+  );
+  final _cleaningPinCtrl = TextEditingController(
+    text: kDebugMode ? '1234' : '',
+  );
 
   @override
   void initState() {
     super.initState();
-    _loadBanks();
+    unawaited(_loadBanks());
   }
 
   @override
@@ -56,6 +84,11 @@ class _AuthScreenState extends State<AuthScreen> {
     _paymentPhoneCtrl.dispose();
     _passwordCtrl.dispose();
     _otpCtrl.dispose();
+    _hotelCodeCtrl.dispose();
+    _receptionUserCtrl.dispose();
+    _receptionPassCtrl.dispose();
+    _cleaningAliasCtrl.dispose();
+    _cleaningPinCtrl.dispose();
     super.dispose();
   }
 
@@ -64,7 +97,6 @@ class _AuthScreenState extends State<AuthScreen> {
     final saved = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.card,
         title: const Text('Servidor API StayPass'),
         content: TextField(
           controller: ctrl,
@@ -103,7 +135,7 @@ class _AuthScreenState extends State<AuthScreen> {
           _banks = list;
         });
       }
-    } catch (_) {
+    } on Object {
       // Mantiene lista local si el backend está iniciando
     }
   }
@@ -116,6 +148,49 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
+      if (_portalRole == 'RECEPTIONIST') {
+        final hotelCode = _hotelCodeCtrl.text.trim();
+        final username = _receptionUserCtrl.text.trim();
+        final password = _receptionPassCtrl.text;
+
+        if (hotelCode.isEmpty || username.isEmpty || password.isEmpty) {
+          throw const ApiException(
+            400,
+            'Ingrese el código del hotel, usuario y contraseña de recepcionista.',
+          );
+        }
+
+        await widget.api.loginReceptionist(
+          hotelCode: hotelCode,
+          username: username,
+          password: password,
+        );
+        widget.onAuthenticated();
+        return;
+      }
+
+      if (_portalRole == 'CLEANING') {
+        final hotelCode = _hotelCodeCtrl.text.trim();
+        final alias = _cleaningAliasCtrl.text.trim();
+        final pin = _cleaningPinCtrl.text.trim();
+
+        if (hotelCode.isEmpty || alias.isEmpty || pin.isEmpty) {
+          throw const ApiException(
+            400,
+            'Ingrese el código del hotel, alias y PIN de camarería.',
+          );
+        }
+
+        await widget.api.loginCleaningStaff(
+          hotelCode: hotelCode,
+          alias: alias,
+          pin: pin,
+        );
+        widget.onAuthenticated();
+        return;
+      }
+
+      // Modo HUÉSPED
       if (_awaitingOtp) {
         await widget.api.verifyGuestOtp(
           phone: _phoneCtrl.text.trim(),
@@ -156,7 +231,7 @@ class _AuthScreenState extends State<AuthScreen> {
               'Revisa tu WhatsApp para ingresar el código OTP.';
         });
       }
-    } catch (e) {
+    } on Object catch (e) {
       setState(() {
         _error = e.toString();
       });
@@ -171,120 +246,110 @@ class _AuthScreenState extends State<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = AppTheme.isDark;
+
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0, -0.75),
-            radius: 1.25,
-            colors: [
-              Color(0xFF1D1812),
-              Color(0xFF0B0E18),
-              AppTheme.background,
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: Stack(
-            children: [
-              Positioned(
-                top: 8,
-                left: 12,
-                child: TextButton.icon(
-                  onPressed: _openServerUrlDialog,
-                  icon: const Icon(
-                    Icons.dns_outlined,
-                    size: 16,
-                    color: AppTheme.textSecondary,
-                  ),
-                  label: const Text(
-                    'Servidor',
-                    style: TextStyle(
-                      fontSize: 12,
+      backgroundColor: AppTheme.background,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Barra superior limpia con Servidor, Tema Claro/Oscuro y Camuflaje
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton.icon(
+                    onPressed: _openServerUrlDialog,
+                    icon: Icon(
+                      Icons.dns_outlined,
+                      size: 16,
                       color: AppTheme.textSecondary,
                     ),
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 8,
-                right: 12,
-                child: TextButton.icon(
-                  onPressed: StealthCalculatorScreen.enable,
-                  icon: const Icon(
-                    Icons.calculate_outlined,
-                    size: 17,
-                    color: AppTheme.textSecondary,
-                  ),
-                  label: const Text(
-                    'Camuflaje',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppTheme.textSecondary,
+                    label: Text(
+                      'Servidor',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: AppTheme.textSecondary,
+                      ),
                     ),
                   ),
-                ),
+                  Row(
+                    children: [
+                      AppTheme.themeToggleButton(),
+                      TextButton.icon(
+                        onPressed: StealthCalculatorScreen.enable,
+                        icon: Icon(
+                          Icons.calculate_outlined,
+                          size: 17,
+                          color: AppTheme.textSecondary,
+                        ),
+                        label: Text(
+                          'Camuflaje',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              Center(
+            ),
+            Expanded(
+              child: Center(
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 16,
+                  ),
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 440),
+                    constraints: const BoxConstraints(maxWidth: 420),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Center(
                           child: Container(
-                            width: 72,
-                            height: 72,
+                            width: 64,
+                            height: 64,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFF2C2314), Color(0xFF131724)],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
+                              color: AppTheme.surface,
                               border: Border.all(
-                                color: AppTheme.gold.withValues(alpha: 0.55),
-                                width: 1.4,
+                                color: AppTheme.warmBeige.withValues(alpha: 0.45),
+                                width: 1.5,
                               ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: AppTheme.gold.withValues(alpha: 0.16),
-                                  blurRadius: 28,
-                                  spreadRadius: 2,
-                                ),
-                              ],
                             ),
-                            child: const Icon(
+                            child: Icon(
                               Icons.qr_code_scanner_rounded,
-                              size: 34,
-                              color: AppTheme.gold,
+                              size: 30,
+                              color: AppTheme.warmBeige,
                             ),
                           ),
                         ),
-                        const SizedBox(height: 16),
-                        const Text(
+                        const SizedBox(height: 14),
+                        Text(
                           'StayPass QR',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 28,
+                            fontSize: 26,
                             fontWeight: FontWeight.w800,
-                            letterSpacing: 0.6,
+                            letterSpacing: -0.3,
                             color: AppTheme.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 6),
-                        const Text(
-                          'Check-in privado sin recepción · Pago Móvil BDV Cero-Clics · Acceso directo en Barrera Vehicular FAAC y Habitación.',
+                        Text(
+                          'Reserva rápida y discreta · Pago Móvil automático · Llave QR para barrera y habitación.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: AppTheme.textSecondary,
-                            fontSize: 13,
+                            fontSize: 13.5,
                             height: 1.4,
                           ),
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 14),
                         Wrap(
                           alignment: WrapAlignment.center,
                           spacing: 8,
@@ -292,34 +357,81 @@ class _AuthScreenState extends State<AuthScreen> {
                           children: [
                             _featureBadge(
                               Icons.directions_car_filled_outlined,
-                              'Barrera FAAC QR',
+                              'Barrera QR',
                               AppTheme.cyan,
                             ),
                             _featureBadge(
                               Icons.shield_moon_outlined,
-                              '100% Anónimo',
+                              '100% Privado',
                               AppTheme.gold,
                             ),
                             _featureBadge(
-                              Icons.bolt_rounded,
-                              'BDV Instantáneo',
+                              Icons.check_circle_outline_rounded,
+                              'Pago Móvil Rápido',
                               AppTheme.accent,
                             ),
                           ],
                         ),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 18),
+                        // Selector de Perfil / Rol de Acceso
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: AppTheme.surface,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: AppTheme.border),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: _roleSegmentButton(
+                                  icon: Icons.person_outline,
+                                  label: 'Huésped',
+                                  selected: _portalRole == 'GUEST',
+                                  onTap: () => setState(() {
+                                    _portalRole = 'GUEST';
+                                    _error = null;
+                                  }),
+                                ),
+                              ),
+                              Expanded(
+                                child: _roleSegmentButton(
+                                  icon: Icons.support_agent_rounded,
+                                  label: 'Recepción',
+                                  selected: _portalRole == 'RECEPTIONIST',
+                                  onTap: () => setState(() {
+                                    _portalRole = 'RECEPTIONIST';
+                                    _error = null;
+                                  }),
+                                ),
+                              ),
+                              Expanded(
+                                child: _roleSegmentButton(
+                                  icon: Icons.cleaning_services_rounded,
+                                  label: 'Limpieza',
+                                  selected: _portalRole == 'CLEANING',
+                                  onTap: () => setState(() {
+                                    _portalRole = 'CLEANING';
+                                    _error = null;
+                                  }),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
                         Container(
                           decoration: BoxDecoration(
-                            color: AppTheme.card.withValues(alpha: 0.94),
-                            borderRadius: BorderRadius.circular(22),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.09),
-                            ),
+                            color: AppTheme.card,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: AppTheme.border),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.45),
-                                blurRadius: 30,
-                                offset: const Offset(0, 14),
+                                color: Colors.black.withValues(
+                                  alpha: isDark ? 0.25 : 0.05,
+                                ),
+                                blurRadius: 20,
+                                offset: const Offset(0, 8),
                               ),
                             ],
                           ),
@@ -327,15 +439,150 @@ class _AuthScreenState extends State<AuthScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              if (!_awaitingOtp)
+                              if (_portalRole == 'RECEPTIONIST') ...[
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.support_agent_rounded,
+                                      color: Colors.tealAccent,
+                                      size: 22,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'Acceso Recepción & Asistencia',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppTheme.textPrimary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Para resolver contingencias, destrabar cerraduras, accionar barrera FAAC y aprobar pagos manuales.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppTheme.textSecondary,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                TextField(
+                                  controller: _hotelCodeCtrl,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Código / Slug del Hotel',
+                                    hintText: 'ej: hotel-caracas',
+                                    prefixIcon: Icon(Icons.hotel_outlined),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _receptionUserCtrl,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Usuario de Recepción',
+                                    hintText: 'ej: juan.recepcion',
+                                    prefixIcon: Icon(Icons.badge_outlined),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _receptionPassCtrl,
+                                  obscureText: _obscurePassword,
+                                  decoration: InputDecoration(
+                                    labelText: 'Contraseña',
+                                    prefixIcon: const Icon(Icons.lock_outline),
+                                    suffixIcon: IconButton(
+                                      icon: Icon(
+                                        _obscurePassword
+                                            ? Icons.visibility_off_outlined
+                                            : Icons.visibility_outlined,
+                                      ),
+                                      onPressed: () {
+                                        setState(() {
+                                          _obscurePassword = !_obscurePassword;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                  onSubmitted: (_) => _submit(),
+                                ),
+                              ] else if (_portalRole == 'CLEANING') ...[
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.cleaning_services_rounded,
+                                      color: Colors.amberAccent,
+                                      size: 22,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'Acceso Camarería (Cero Finanzas)',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppTheme.textPrimary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Consulte habitaciones para aseo, alertas de salida (≤15m) y entregas en pasaplatos.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppTheme.textSecondary,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                TextField(
+                                  controller: _hotelCodeCtrl,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Código / Slug del Hotel',
+                                    hintText: 'ej: hotel-caracas',
+                                    prefixIcon: Icon(Icons.hotel_outlined),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _cleaningAliasCtrl,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Alias Operativo',
+                                    hintText: 'ej: camarera1',
+                                    prefixIcon: Icon(Icons.badge_outlined),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _cleaningPinCtrl,
+                                  keyboardType: TextInputType.number,
+                                  obscureText: _obscurePassword,
+                                  decoration: InputDecoration(
+                                    labelText: 'PIN Numérico (4 dígitos)',
+                                    hintText: '1234',
+                                    prefixIcon: const Icon(Icons.pin_outlined),
+                                    suffixIcon: IconButton(
+                                      icon: Icon(
+                                        _obscurePassword
+                                            ? Icons.visibility_off_outlined
+                                            : Icons.visibility_outlined,
+                                      ),
+                                      onPressed: () {
+                                        setState(() {
+                                          _obscurePassword = !_obscurePassword;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                  onSubmitted: (_) => _submit(),
+                                ),
+                              ] else ...[
+                                if (!_awaitingOtp)
                                 Container(
                                   padding: const EdgeInsets.all(4),
                                   decoration: BoxDecoration(
                                     color: AppTheme.surface,
-                                    borderRadius: BorderRadius.circular(14),
-                                    border: Border.all(
-                                      color: Colors.white.withValues(alpha: 0.06),
-                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: AppTheme.border),
                                   ),
                                   child: Row(
                                     children: [
@@ -362,17 +609,21 @@ class _AuthScreenState extends State<AuthScreen> {
                                     ],
                                   ),
                                 ),
-                              const SizedBox(height: 20),
+                              const SizedBox(height: 18),
                               if (_awaitingOtp) ...[
-                                const Row(
+                                Row(
                                   children: [
-                                    Icon(Icons.verified_outlined, color: AppTheme.gold),
-                                    SizedBox(width: 8),
+                                    Icon(
+                                      Icons.verified_outlined,
+                                      color: AppTheme.gold,
+                                    ),
+                                    const SizedBox(width: 8),
                                     Text(
-                                      'Verificación WhatsApp OTP',
+                                      'Verificación de Código',
                                       style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w700,
+                                        color: AppTheme.textPrimary,
                                       ),
                                     ),
                                   ],
@@ -393,7 +644,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                   TextField(
                                     controller: _fullNameCtrl,
                                     decoration: const InputDecoration(
-                                      labelText: 'Alias o nombre (uso privado cifrado)',
+                                      labelText: 'Alias o nombre (uso privado)',
                                       prefixIcon: Icon(Icons.person_outline),
                                     ),
                                   ),
@@ -405,45 +656,50 @@ class _AuthScreenState extends State<AuthScreen> {
                                   decoration: const InputDecoration(
                                     labelText: 'Teléfono (+58)',
                                     hintText: '+584129876543',
-                                    prefixIcon: Icon(Icons.phone_android_outlined),
+                                    prefixIcon:
+                                        Icon(Icons.phone_android_outlined),
                                   ),
                                 ),
                                 const SizedBox(height: 12),
                                 if (!_isLogin) ...[
                                   Container(
-                                    margin: const EdgeInsets.symmetric(vertical: 6),
+                                    margin:
+                                        const EdgeInsets.symmetric(vertical: 4),
                                     padding: const EdgeInsets.all(12),
                                     decoration: BoxDecoration(
-                                      color: AppTheme.accent.withValues(alpha: 0.08),
-                                      borderRadius: BorderRadius.circular(14),
+                                      color: AppTheme.accent
+                                          .withValues(alpha: 0.10),
+                                      borderRadius: BorderRadius.circular(12),
                                       border: Border.all(
-                                        color: AppTheme.accent.withValues(alpha: 0.28),
+                                        color: AppTheme.accent
+                                            .withValues(alpha: 0.25),
                                       ),
                                     ),
-                                    child: const Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Row(
                                           children: [
                                             Icon(
                                               Icons.flash_on_rounded,
-                                              size: 17,
+                                              size: 16,
                                               color: AppTheme.accent,
                                             ),
-                                            SizedBox(width: 6),
+                                            const SizedBox(width: 6),
                                             Text(
-                                              'Pago Móvil Frecuente (Cero-Clics)',
+                                              'Pago Móvil Frecuente (Automático)',
                                               style: TextStyle(
                                                 fontWeight: FontWeight.w700,
-                                                fontSize: 13,
+                                                fontSize: 12.5,
                                                 color: AppTheme.accent,
                                               ),
                                             ),
                                           ],
                                         ),
-                                        SizedBox(height: 4),
+                                        const SizedBox(height: 4),
                                         Text(
-                                          'Cifrado con AES-256. Permite validar tu Pago Móvil BDV al instante sin enviar capturas ni ver al personal.',
+                                          'Tus datos viajan cifrados y permiten confirmar tu Pago Móvil al instante sin enviar capturas.',
                                           style: TextStyle(
                                             fontSize: 11.5,
                                             color: AppTheme.textSecondary,
@@ -467,7 +723,8 @@ class _AuthScreenState extends State<AuthScreen> {
                                     isExpanded: true,
                                     decoration: const InputDecoration(
                                       labelText: 'Banco emisor',
-                                      prefixIcon: Icon(Icons.account_balance_outlined),
+                                      prefixIcon:
+                                          Icon(Icons.account_balance_outlined),
                                     ),
                                     items: _banks
                                         .map(
@@ -491,7 +748,8 @@ class _AuthScreenState extends State<AuthScreen> {
                                     controller: _paymentPhoneCtrl,
                                     keyboardType: TextInputType.phone,
                                     decoration: const InputDecoration(
-                                      labelText: 'Teléfono afiliado al Pago Móvil',
+                                      labelText:
+                                          'Teléfono afiliado al Pago Móvil',
                                       hintText: 'Vacío si es el mismo teléfono',
                                       prefixIcon: Icon(Icons.payments_outlined),
                                     ),
@@ -500,21 +758,38 @@ class _AuthScreenState extends State<AuthScreen> {
                                 ],
                                 TextField(
                                   controller: _passwordCtrl,
-                                  obscureText: true,
-                                  decoration: const InputDecoration(
+                                  obscureText: _obscurePassword,
+                                  decoration: InputDecoration(
                                     labelText: 'Contraseña',
-                                    prefixIcon: Icon(Icons.lock_outline),
+                                    prefixIcon: const Icon(Icons.lock_outline),
+                                    suffixIcon: IconButton(
+                                      icon: Icon(
+                                        _obscurePassword
+                                            ? Icons.visibility_off_outlined
+                                            : Icons.visibility_outlined,
+                                      ),
+                                      tooltip: _obscurePassword
+                                          ? 'Mostrar contraseña'
+                                          : 'Ocultar contraseña',
+                                      onPressed: () {
+                                        setState(() {
+                                          _obscurePassword = !_obscurePassword;
+                                        });
+                                      },
+                                    ),
                                   ),
                                   onSubmitted: (_) => _submit(),
                                 ),
+                              ],
                               ],
                               if (_info != null) ...[
                                 const SizedBox(height: 14),
                                 Text(
                                   _info!,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     color: AppTheme.accent,
                                     fontSize: 13,
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
                               ],
@@ -523,12 +798,13 @@ class _AuthScreenState extends State<AuthScreen> {
                                 Container(
                                   padding: const EdgeInsets.all(10),
                                   decoration: BoxDecoration(
-                                    color: AppTheme.danger.withValues(alpha: 0.12),
+                                    color:
+                                        AppTheme.danger.withValues(alpha: 0.12),
                                     borderRadius: BorderRadius.circular(10),
                                   ),
                                   child: Text(
                                     _error!,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       color: AppTheme.danger,
                                       fontSize: 12.5,
                                     ),
@@ -539,12 +815,12 @@ class _AuthScreenState extends State<AuthScreen> {
                               ElevatedButton.icon(
                                 onPressed: _loading ? null : _submit,
                                 icon: _loading
-                                    ? const SizedBox(
+                                    ? SizedBox(
                                         height: 18,
                                         width: 18,
                                         child: CircularProgressIndicator(
                                           strokeWidth: 2,
-                                          color: Colors.black,
+                                          color: AppTheme.onPrimary,
                                         ),
                                       )
                                     : Icon(
@@ -553,11 +829,15 @@ class _AuthScreenState extends State<AuthScreen> {
                                             : Icons.arrow_forward_rounded,
                                       ),
                                 label: Text(
-                                  _awaitingOtp
-                                      ? 'Verificar código'
-                                      : (_isLogin
-                                          ? 'Entrar en Modo Privado'
-                                          : 'Crear Billetera de Acceso QR'),
+                                  _portalRole == 'RECEPTIONIST'
+                                      ? 'Entrar a Recepción'
+                                      : (_portalRole == 'CLEANING'
+                                          ? 'Entrar a Limpieza'
+                                          : (_awaitingOtp
+                                              ? 'Verificar código'
+                                              : (_isLogin
+                                                  ? 'Entrar a StayPass'
+                                                  : 'Crear Cuenta Privada'))),
                                 ),
                               ),
                             ],
@@ -568,8 +848,46 @@ class _AuthScreenState extends State<AuthScreen> {
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _roleSegmentButton({
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: selected ? AppTheme.onPrimary : AppTheme.textSecondary,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 12.5,
+                color: selected ? AppTheme.onPrimary : AppTheme.textSecondary,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -583,11 +901,11 @@ class _AuthScreenState extends State<AuthScreen> {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(vertical: 11),
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? AppTheme.gold : Colors.transparent,
-          borderRadius: BorderRadius.circular(11),
+          color: selected ? AppTheme.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(9),
         ),
         child: Text(
           label,
@@ -595,7 +913,7 @@ class _AuthScreenState extends State<AuthScreen> {
           style: TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 13.5,
-            color: selected ? const Color(0xFF090A0F) : AppTheme.textSecondary,
+            color: selected ? AppTheme.onPrimary : AppTheme.textSecondary,
           ),
         ),
       ),
@@ -606,9 +924,9 @@ class _AuthScreenState extends State<AuthScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.30)),
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

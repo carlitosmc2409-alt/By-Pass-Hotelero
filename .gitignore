@@ -21,6 +21,9 @@ profile.md
 
 # Logs y sistema
 *.log
+*.exe
+.agents/
+AGENTS.md
 .DS_Store
 Thumbs.db
 .idea/

@@ -159,8 +159,14 @@ async function handleBdvNotificationWebhook(request, reply) {
   })
 }
 
-// POST /api/v1/payments/:paymentId/confirm  — PROPIETARIO confirma el pago manualmente (respaldo)
+// POST /api/v1/payments/:paymentId/confirm  — PROPIETARIO confirma el pago manualmente (respaldo / contingencia BDV)
 async function handleConfirmPayment(request, reply) {
+  const body = request.body || {}
+  const gatewayRef = body.gatewayRef ? normalizeRef(body.gatewayRef) : null
+  const gateway = body.gateway || null
+  const notes = body.notes || 'Confirmado manualmente por el administrador'
+  const reason = body.reason || null
+
   const payment = await prisma.payment.findUnique({
     where: { id: request.params.paymentId },
     include: {
@@ -178,11 +184,27 @@ async function handleConfirmPayment(request, reply) {
     return reply.status(400).send({ message: 'El pago ya fue procesado' })
   }
 
+  if (gatewayRef && gatewayRef !== payment.gatewayRef) {
+    const duplicate = await prisma.payment.findFirst({
+      where: {
+        gateway: gateway || payment.gateway,
+        gatewayRef,
+        id: { not: payment.id },
+      },
+    })
+    if (duplicate) {
+      return reply.status(409).send({
+        message: 'Esta referencia bancaria ya fue utilizada en otro pago',
+      })
+    }
+  }
+
   const activation = await prisma.$transaction(async (tx) =>
     activateApprovedPaymentInTx(tx, {
       payment,
       reservation: payment.reservation,
-      confirmedBy: request.user.id,
+      confirmedBy: `manual:owner:${request.user.id}`,
+      manualData: { gatewayRef, gateway, notes, reason },
     })
   )
 
@@ -197,14 +219,16 @@ async function handleConfirmPayment(request, reply) {
 
   return reply.send({
     message: activation.isRoomService
-      ? 'Pago de consumo confirmado. Orden enviada a entrega en pasaplatos.'
+      ? 'Pago de consumo confirmado manualmente. Orden enviada a entrega en pasaplatos.'
       : activation.isExtension
-        ? 'Extensión confirmada. El horario del QR del huésped fue ampliado.'
-        : 'Pago confirmado. La reserva está activa y el huésped ya puede obtener su QR.',
+        ? 'Extensión confirmada manualmente. El horario del QR del huésped fue ampliado.'
+        : 'Pago confirmado manualmente. La reserva está activa y el huésped ya puede obtener su QR.',
     reservationId: activation.targetReservationId,
     orderReservationId: activation.orderReservationId || null,
     isExtension: activation.isExtension,
     isRoomService: Boolean(activation.isRoomService),
+    gateway: gateway || payment.gateway,
+    gatewayRef: gatewayRef || payment.gatewayRef,
   })
 }
 
@@ -265,9 +289,68 @@ async function handleListPending(request, reply) {
   return reply.send(payments)
 }
 
+// Registro en memoria de la salud del puente Android de cada hotel
+const bdvBridgeStatusByHotel = new Map()
+
+// POST /api/v1/payments/webhook/bdv-bridge/heartbeat
+async function handleBdvBridgeHeartbeat(request, reply) {
+  const token = request.headers['x-hotel-bridge-token']
+  const body = request.body || {}
+  const hotelId = String(body.hotelId || '')
+
+  if (!hotelId || !token) {
+    return reply.status(401).send({ message: 'Credenciales incompletas' })
+  }
+
+  const isValid = validateHotelBridgeToken(hotelId, token)
+  if (!isValid) {
+    return reply.status(401).send({ message: 'Token de puente BDV no válido' })
+  }
+
+  const now = Date.now()
+  const statusInfo = {
+    hotelId,
+    online: true,
+    lastHeartbeatMs: now,
+    lastHeartbeatAt: new Date().toISOString(),
+    pendingQueueCount: Number(body.pendingQueueCount || 0),
+    forwardedCount: Number(body.forwardedCount || 0),
+    version: body.version || '2.0',
+    ip: request.ip,
+  }
+  bdvBridgeStatusByHotel.set(hotelId, statusInfo)
+
+  return reply.send({ status: 'ok', acknowledgedAt: statusInfo.lastHeartbeatAt })
+}
+
+// GET /api/v1/payments/bdv-bridge/status/:hotelId
+async function handleGetBdvBridgeStatus(request, reply) {
+  const { hotelId } = request.params
+  const hotel = await prisma.hotel.findUnique({ where: { id: hotelId }, select: { ownerId: true } })
+
+  if (!hotel || hotel.ownerId !== request.user.id) {
+    return reply.status(403).send({ message: 'Sin acceso' })
+  }
+
+  const record = bdvBridgeStatusByHotel.get(hotelId)
+  const isOnline = record && (Date.now() - record.lastHeartbeatMs < 120000)
+
+  return reply.send({
+    hotelId,
+    online: Boolean(isOnline),
+    lastHeartbeatAt: record?.lastHeartbeatAt || null,
+    pendingQueueCount: record?.pendingQueueCount || 0,
+    forwardedCount: record?.forwardedCount || 0,
+    version: record?.version || null,
+    latencySec: record ? Math.round((Date.now() - record.lastHeartbeatMs) / 1000) : null,
+  })
+}
+
 module.exports = {
   handleSubmitProof,
   handleBdvNotificationWebhook,
+  handleBdvBridgeHeartbeat,
+  handleGetBdvBridgeStatus,
   handleConfirmPayment,
   handleRejectPayment,
   handleListPending,

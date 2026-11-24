@@ -339,6 +339,71 @@ async function loginCleaningStaff({ hotelCode, alias, pin }, app) {
   throw error
 }
 
+/**
+ * Login de Recepcionista / Administrador Operativo (RECEPTIONIST).
+ * Asiste al cliente si las cosas automatizadas fallan, aprueba pagos manuales,
+ * emite tokens de emergencia y gestiona contingencias en el lobby.
+ */
+async function loginReceptionist({ hotelCode, username, password }, app) {
+  const { normalizeHotelSettings } = require('../../utils/hotelSettings')
+  const cleanUser = String(username || '').trim().toLowerCase()
+  const cleanCode = String(hotelCode || '').trim().toLowerCase()
+
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanCode)
+  const hotels = await prisma.hotel.findMany({
+    where: {
+      status: 'ACTIVE',
+      ...(cleanCode
+        ? {
+            OR: [
+              ...(isUuid ? [{ id: cleanCode }] : []),
+              { slug: cleanCode },
+              { slug: { contains: cleanCode, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    },
+    select: { id: true, name: true, slug: true, settings: true },
+  })
+
+  for (const hotel of hotels) {
+    const settings = normalizeHotelSettings(hotel.settings)
+    const staff = (settings.receptionStaff || []).find(
+      s => s.active !== false &&
+        (String(s.username || '').toLowerCase() === cleanUser ||
+         String(s.email || '').toLowerCase() === cleanUser)
+    )
+    if (staff && staff.passwordHash) {
+      const ok = await bcrypt.compare(String(password), staff.passwordHash)
+      if (ok) {
+        const accessToken = app.jwt.sign(
+          {
+            id: staff.id,
+            role: 'RECEPTIONIST',
+            hotelId: hotel.id,
+            hotelName: hotel.name,
+            fullName: staff.name,
+            username: staff.username,
+          },
+          { expiresIn: '12h' }
+        )
+        return {
+          accessToken,
+          role: 'RECEPTIONIST',
+          hotelId: hotel.id,
+          hotelName: hotel.name,
+          staffName: staff.name,
+          username: staff.username,
+        }
+      }
+    }
+  }
+
+  const error = new Error('Usuario, código de hotel o contraseña de recepción incorrectos')
+  error.statusCode = 401
+  throw error
+}
+
 // ── TOKENS ────────────────────────────────────────────────────
 
 /**
@@ -461,6 +526,7 @@ module.exports = {
   registerOwner,
   loginOwner,
   loginCleaningStaff,
+  loginReceptionist,
   refreshAccessToken,
   revokeRefreshToken,
   requestOtp,

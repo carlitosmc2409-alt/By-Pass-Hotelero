@@ -5,6 +5,7 @@ const { listHotelDevices } = require('../../utils/iotRegistry')
 const { getRate } = require('../../utils/rates')
 const { normalizeHotelSettings, sanitizeStaffList } = require('../../utils/hotelSettings')
 const { parseRoomServiceNote, ROOM_SERVICE_PREFIX } = require('../reservations/reservations.controller')
+const { computeHotelReviewsData } = require('../reviews/reviews.controller')
 const bcrypt = require('bcryptjs')
 const { v4: uuidv4 } = require('uuid')
 const { z } = require('zod')
@@ -24,6 +25,8 @@ const createHotelSchema = z.object({
   city: z.string().min(2),
   phone: z.string().optional(),
   description: z.string().optional(),
+  coverPhoto: z.string().nullable().optional(),
+  photos: z.array(z.string()).max(12).optional(),
   latitude: z.number().optional(),
   longitude: z.number().optional(),
   paymentInfo: paymentInfoSchema,
@@ -59,13 +62,16 @@ const operationsSchema = z.object({
 })
 
 const createStaffSchema = z.object({
+  role: z.enum(['CLEANING', 'RECEPTIONIST']).default('CLEANING'),
   name: z.string().min(2).max(80),
   alias: z
     .string()
     .min(2)
     .max(40)
-    .regex(/^[a-zA-Z0-9._-]+$/, 'El alias solo puede contener letras, números, puntos o guiones'),
-  pin: z.string().min(4, 'El PIN debe tener al menos 4 caracteres').max(20),
+    .regex(/^[a-zA-Z0-9._-]+$/, 'El alias o usuario solo puede contener letras, números, puntos o guiones'),
+  pin: z.string().min(4, 'El PIN o contraseña debe tener al menos 4 caracteres').max(100),
+  phone: z.string().optional(),
+  email: z.string().optional(),
 })
 
 // POST /api/v1/hotels
@@ -101,6 +107,7 @@ async function handleListPublic(request, reply) {
         latitude: true,
         longitude: true,
         coverPhoto: true,
+        photos: true,
         description: true,
         settings: true,
         rooms: {
@@ -129,8 +136,13 @@ async function handleListPublic(request, reply) {
 
   const formatted = hotels.map(({ settings, ...h }) => {
     const norm = normalizeHotelSettings(settings)
+    const reviewData = computeHotelReviewsData(settings)
     return {
       ...h,
+      latitude: h.latitude || 10.4806,
+      longitude: h.longitude || -66.9036,
+      rating: reviewData.averageRating,
+      reviewsCount: reviewData.reviewsCount,
       faacEnabled: norm.faac.enabled !== false,
     }
   })
@@ -165,9 +177,15 @@ async function handleGetPublic(request, reply) {
   if (!hotel) return reply.status(404).send({ message: 'Hotel no encontrado' })
 
   const norm = normalizeHotelSettings(hotel.settings)
+  const reviewData = computeHotelReviewsData(hotel.settings)
   const { settings, ...publicHotel } = hotel
   return reply.send({
     ...publicHotel,
+    latitude: publicHotel.latitude || 10.4806,
+    longitude: publicHotel.longitude || -66.9036,
+    rating: reviewData.averageRating,
+    reviewsCount: reviewData.reviewsCount,
+    reviews: reviewData.reviews,
     faac: {
       enabled: norm.faac.enabled !== false,
       model: norm.faac.model,
@@ -262,9 +280,9 @@ async function handleUpdateOperations(request, reply) {
   })
 }
 
-// POST /api/v1/hotels/:id/staff  — crear credencial para personal de limpieza (CLEANING)
+// POST /api/v1/hotels/:id/staff  — crear cuenta para recepcionista (RECEPTIONIST) o camarera (CLEANING)
 async function handleCreateStaff(request, reply) {
-  const { name, alias, pin } = createStaffSchema.parse(request.body)
+  const { role, name, alias, pin, phone, email } = createStaffSchema.parse(request.body)
   const hotel = await prisma.hotel.findUnique({ where: { id: request.params.id } })
 
   if (!hotel || hotel.ownerId !== request.user.id) {
@@ -273,23 +291,40 @@ async function handleCreateStaff(request, reply) {
 
   const current = normalizeHotelSettings(hotel.settings)
   const normalizedAlias = alias.trim().toLowerCase()
-  if (current.cleaningStaff.some(s => String(s.alias).toLowerCase() === normalizedAlias)) {
-    return reply.status(409).send({ message: 'Ya existe un integrante con ese alias en este hotel' })
-  }
+  const hash = await bcrypt.hash(pin, env.BCRYPT_ROUNDS)
 
-  const pinHash = await bcrypt.hash(pin, env.BCRYPT_ROUNDS)
-  const member = {
-    id: uuidv4(),
-    name: name.trim(),
-    alias: normalizedAlias,
-    pinHash,
-    active: true,
-    createdAt: new Date().toISOString(),
-  }
+  const nextSettings = { ...current }
 
-  const nextSettings = {
-    ...current,
-    cleaningStaff: [...current.cleaningStaff, member],
+  if (role === 'RECEPTIONIST') {
+    if ((current.receptionStaff || []).some(s => String(s.username).toLowerCase() === normalizedAlias)) {
+      return reply.status(409).send({ message: 'Ya existe un recepcionista con ese usuario/alias en este hotel' })
+    }
+    const member = {
+      id: uuidv4(),
+      name: name.trim(),
+      username: normalizedAlias,
+      email: email?.trim() || `${normalizedAlias}@hotel.local`,
+      phone: phone?.trim() || '',
+      passwordHash: hash,
+      role: 'RECEPTIONIST',
+      active: true,
+      createdAt: new Date().toISOString(),
+    }
+    nextSettings.receptionStaff = [...(current.receptionStaff || []), member]
+  } else {
+    if ((current.cleaningStaff || []).some(s => String(s.alias).toLowerCase() === normalizedAlias)) {
+      return reply.status(409).send({ message: 'Ya existe un integrante de limpieza con ese alias en este hotel' })
+    }
+    const member = {
+      id: uuidv4(),
+      name: name.trim(),
+      alias: normalizedAlias,
+      pinHash: hash,
+      role: 'CLEANING',
+      active: true,
+      createdAt: new Date().toISOString(),
+    }
+    nextSettings.cleaningStaff = [...(current.cleaningStaff || []), member]
   }
 
   await prisma.hotel.update({
@@ -298,9 +333,10 @@ async function handleCreateStaff(request, reply) {
   })
 
   return reply.status(201).send({
-    message: 'Personal operativo creado exitosamente',
+    message: role === 'RECEPTIONIST' ? 'Cuenta de recepcionista creada exitosamente' : 'Personal de limpieza creado exitosamente',
     hotelCode: hotel.slug,
-    staff: sanitizeStaffList(nextSettings.cleaningStaff),
+    cleaningStaff: sanitizeStaffList(nextSettings.cleaningStaff),
+    receptionStaff: sanitizeStaffList(nextSettings.receptionStaff),
   })
 }
 
@@ -314,16 +350,24 @@ async function handleDeleteStaff(request, reply) {
   }
 
   const current = normalizeHotelSettings(hotel.settings)
-  const nextList = current.cleaningStaff.filter(s => s.id !== staffId)
+  const nextCleaning = (current.cleaningStaff || []).filter(s => s.id !== staffId)
+  const nextReception = (current.receptionStaff || []).filter(s => s.id !== staffId)
+
+  const nextSettings = {
+    ...current,
+    cleaningStaff: nextCleaning,
+    receptionStaff: nextReception,
+  }
 
   await prisma.hotel.update({
     where: { id: hotel.id },
-    data: { settings: { ...current, cleaningStaff: nextList } },
+    data: { settings: nextSettings },
   })
 
   return reply.send({
-    message: 'Credencial revocada',
-    staff: sanitizeStaffList(nextList),
+    message: 'Cuenta revocada exitosamente',
+    cleaningStaff: sanitizeStaffList(nextCleaning),
+    receptionStaff: sanitizeStaffList(nextReception),
   })
 }
 
@@ -425,19 +469,180 @@ async function handleCleaningBoard(request, reply) {
 
   const pendingDeliveries = await fetchPendingRoomServiceDeliveries(id)
 
+  const dirtyRooms = rooms.filter(r => r.status === 'CLEANING')
+  const availableRooms = rooms.filter(r => r.status === 'AVAILABLE')
+  const occupiedRooms = rooms.filter(r => r.status === 'OCCUPIED')
+  const maintenanceRooms = rooms.filter(r => r.status === 'MAINTENANCE')
+  const expiringSoon = rooms.filter(r => r.expiringSoon)
+
   return reply.send({
     hotel: {
       id: hotel.id,
       name: hotel.name,
     },
     summary: {
-      cleaningCount: rooms.filter(r => r.status === 'CLEANING').length,
-      availableCount: rooms.filter(r => r.status === 'AVAILABLE').length,
-      occupiedCount: rooms.filter(r => r.status === 'OCCUPIED').length,
-      expiringSoonCount: rooms.filter(r => r.expiringSoon).length,
+      cleaningCount: dirtyRooms.length,
+      availableCount: availableRooms.length,
+      occupiedCount: occupiedRooms.length,
+      maintenanceCount: maintenanceRooms.length,
+      expiringSoonCount: expiringSoon.length,
       pendingDeliveriesCount: pendingDeliveries.length,
     },
     rooms,
+    dirtyRooms,
+    availableRooms,
+    occupiedRooms,
+    maintenanceRooms,
+    expiringSoon,
+    pendingDeliveries,
+  })
+}
+
+// GET /api/v1/hotels/:id/reception-board  — tablero de recepción y asistencia al cliente (RECEPTIONIST u OWNER)
+async function handleReceptionBoard(request, reply) {
+  const { id } = request.params
+  const hotel = await prisma.hotel.findUnique({
+    where: { id },
+    include: {
+      rooms: {
+        orderBy: { sortOrder: 'asc' },
+        include: {
+          reservations: {
+            where: { status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PAYMENT_PENDING_REVIEW'] } },
+            orderBy: { checkIn: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              checkIn: true,
+              checkOut: true,
+              durationHours: true,
+              totalAmount: true,
+              status: true,
+              guest: {
+                select: {
+                  id: true,
+                  fullName: true,
+                  phone: true,
+                },
+              },
+              payment: {
+                select: {
+                  id: true,
+                  status: true,
+                  gateway: true,
+                  gatewayRef: true,
+                  amount: true,
+                  amountVes: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+
+  if (!hotel) return reply.status(404).send({ message: 'Hotel no encontrado' })
+
+  const isOwner = request.user.role === 'OWNER' && hotel.ownerId === request.user.id
+  const isReceptionist = request.user.role === 'RECEPTIONIST' && request.user.hotelId === hotel.id
+  if (!isOwner && !isReceptionist) {
+    return reply.status(403).send({ message: 'Sin permiso para ver el tablero de recepción de este hotel' })
+  }
+
+  const nowMs = Date.now()
+  const rooms = hotel.rooms.map(r => {
+    const active = r.reservations[0] || null
+    let minutesRemaining = null
+    if (active?.checkOut && active.status === 'ACTIVE') {
+      minutesRemaining = Math.max(
+        0,
+        Math.ceil((new Date(active.checkOut).getTime() - nowMs) / 60000)
+      )
+    }
+    return {
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      floorNumber: r.floorNumber,
+      status: r.status,
+      pricePerHour: Number(r.pricePerHour),
+      pricePerNight: Number(r.pricePerNight),
+      minutesRemaining,
+      expiringSoon: minutesRemaining !== null && minutesRemaining <= 15,
+      currentReservation: active
+        ? {
+            id: active.id,
+            status: active.status,
+            checkIn: active.checkIn,
+            checkOut: active.checkOut,
+            durationHours: active.durationHours,
+            totalAmount: Number(active.totalAmount),
+            guestName: active.guest?.fullName || 'Huésped',
+            guestPhone: active.guest?.phone || '',
+            payment: active.payment
+              ? {
+                  ...active.payment,
+                  amount: Number(active.payment.amount),
+                  amountVes: active.payment.amountVes ? Number(active.payment.amountVes) : null,
+                }
+              : null,
+          }
+        : null,
+      updatedAt: r.updatedAt,
+    }
+  })
+
+  const pendingReservations = await prisma.reservation.findMany({
+    where: {
+      room: { hotelId: id },
+      status: { in: ['PENDING_PAYMENT', 'PAYMENT_PENDING_REVIEW'] },
+    },
+    include: {
+      room: { select: { id: true, name: true, type: true } },
+      guest: { select: { id: true, fullName: true, phone: true } },
+      payment: true,
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+  })
+
+  const pendingPayments = pendingReservations.map(res => ({
+    reservationId: res.id,
+    roomName: res.room.name,
+    guestName: res.guest.fullName,
+    guestPhone: res.guest.phone,
+    totalUsd: Number(res.totalAmount),
+    paymentId: res.payment?.id || null,
+    paymentStatus: res.payment?.status || res.status,
+    amountVes: res.payment?.amountVes ? Number(res.payment.amountVes) : null,
+    gateway: res.payment?.gateway || 'PAGO_MOVIL',
+    gatewayRef: res.payment?.gatewayRef || null,
+    createdAt: res.createdAt,
+  }))
+
+  const pendingDeliveries = await fetchPendingRoomServiceDeliveries(id)
+  const normSettings = normalizeHotelSettings(hotel.settings)
+
+  return reply.send({
+    hotel: {
+      id: hotel.id,
+      name: hotel.name,
+      slug: hotel.slug,
+      address: hotel.address,
+      phone: hotel.phone,
+      faac: normSettings.faac,
+    },
+    summary: {
+      totalRooms: rooms.length,
+      availableCount: rooms.filter(r => r.status === 'AVAILABLE').length,
+      occupiedCount: rooms.filter(r => r.status === 'OCCUPIED').length,
+      cleaningCount: rooms.filter(r => r.status === 'CLEANING').length,
+      pendingPaymentsCount: pendingPayments.length,
+      pendingDeliveriesCount: pendingDeliveries.length,
+    },
+    rooms,
+    pendingPayments,
     pendingDeliveries,
   })
 }
@@ -596,6 +801,7 @@ async function handleOwnerDashboard(request, reply) {
   }).catch(() => null)
 
   const normSettings = normalizeHotelSettings(hotel.settings)
+  const reviewData = computeHotelReviewsData(hotel.settings)
   const pendingDeliveries = await fetchPendingRoomServiceDeliveries(id)
 
   return reply.send({
@@ -605,6 +811,11 @@ async function handleOwnerDashboard(request, reply) {
       slug: hotel.slug,
       address: hotel.address,
       city: hotel.city,
+      latitude: hotel.latitude || 10.4806,
+      longitude: hotel.longitude || -66.9036,
+      description: hotel.description,
+      coverPhoto: hotel.coverPhoto,
+      photos: Array.isArray(hotel.photos) ? hotel.photos : [],
       status: hotel.status,
       paymentInfo: hotel.paymentInfo,
       bdvBridgeToken: generateHotelBridgeToken(hotel.id),
@@ -613,6 +824,10 @@ async function handleOwnerDashboard(request, reply) {
       faac: normSettings.faac,
       roomServiceMenu: normSettings.roomServiceMenu,
       cleaningStaff: sanitizeStaffList(normSettings.cleaningStaff),
+      receptionStaff: sanitizeStaffList(normSettings.receptionStaff),
+      rating: reviewData.averageRating,
+      reviewsCount: reviewData.reviewsCount,
+      reviews: reviewData.reviews,
     },
     iotDevices: listHotelDevices(id),
     metrics: {
@@ -674,5 +889,6 @@ module.exports = {
   handleCreateStaff,
   handleDeleteStaff,
   handleCleaningBoard,
+  handleReceptionBoard,
   handleOwnerDashboard,
 }

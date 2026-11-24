@@ -10,6 +10,13 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
+process.on('uncaughtException', (err) => {
+  console.warn('⚠️ [ServeApps uncaughtException]:', err.message)
+})
+process.on('unhandledRejection', (reason) => {
+  console.warn('⚠️ [ServeApps unhandledRejection]:', reason)
+})
+
 const ROOT = path.resolve(__dirname, '..')
 let QRCode = null
 try {
@@ -193,6 +200,8 @@ async function renderApkDownloadPage(req, res, port) {
 
 function startStaticServer(name, baseDir, port, { enableApkPortal = false } = {}) {
   const server = http.createServer(async (req, res) => {
+    req.on('error', () => {})
+    res.on('error', () => {})
     const cleanUrl = decodeURIComponent((req.url || '/').split('?')[0])
 
     if (enableApkPortal && (cleanUrl === '/descargar' || cleanUrl === '/apks')) {
@@ -241,11 +250,17 @@ function startStaticServer(name, baseDir, port, { enableApkPortal = false } = {}
         const contentType = MIME_TYPES[ext] || 'application/octet-stream'
         res.writeHead(200, {
           'Content-Type': contentType,
-          'Cache-Control': 'no-cache',
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0',
         })
         res.end(data)
       })
     })
+  })
+
+  server.on('error', (err) => {
+    console.warn(`⚠️ [Servidor ${name} :${port}]:`, err.message)
   })
 
   // Dual-stack (::1 + 127.0.0.1 + LAN Wi-Fi)

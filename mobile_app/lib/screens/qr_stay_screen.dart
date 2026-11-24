@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../core/api_client.dart';
@@ -42,11 +43,13 @@ class _QrStayScreenState extends State<QrStayScreen> {
   @override
   void initState() {
     super.initState();
-    _loadAll().then((_) {
-      if (widget.openRoomServiceOnStart && mounted && _qr != null) {
-        _openRoomServiceSheet();
-      }
-    });
+    unawaited(
+      _loadAll().then((_) {
+        if (widget.openRoomServiceOnStart && mounted && _qr != null) {
+          unawaited(_openRoomServiceSheet());
+        }
+      }),
+    );
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _qr != null) setState(() {});
     });
@@ -67,32 +70,35 @@ class _QrStayScreenState extends State<QrStayScreen> {
       if (type == 'ROOM_SERVICE_DELIVERED') {
         setState(() {
           _hardwareFeedback =
-              '🛎️ ¡Tu pedido anónimo fue depositado en el pasaplatos/esclusa!';
+              '🛎️ ¡Tu pedido fue depositado en el pasaplatos de tu habitación!';
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             backgroundColor: AppTheme.accent,
             content: Text(
               '🛎️ ¡Tu pedido ya está en el pasaplatos! Retíralo con total privacidad.',
-              style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: AppTheme.onAccent,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         );
-        _refreshOrders();
+        unawaited(_refreshOrders());
       } else if (type == 'FAAC_BARRIER_PULSE') {
         final dir = event['direction'] == 'EXIT' ? 'SALIDA' : 'ENTRADA';
         final ms = event['pulseDurationMs'] ?? 1000;
         setState(() {
           _hardwareFeedback =
-              '🚗 Barrera FAAC ($dir) activada · Contacto seco OPEN-A (${ms}ms)';
+              '🚗 Barrera ($dir) abierta · Pulso enviado (${ms}ms)';
         });
       } else if (type == 'DOOR_UNLOCK_PULSE') {
         setState(() {
           _hardwareFeedback =
-              '🔓 Cerradura electrónica de suite desbloqueada en vivo';
+              '🔓 Cerradura electrónica de la suite desbloqueada';
         });
       } else if (type == 'PAYMENT_APPROVED' || type == 'ROOM_SERVICE_ORDER') {
-        _loadAll(silent: true);
+        unawaited(_loadAll(silent: true));
       }
     });
   }
@@ -111,15 +117,20 @@ class _QrStayScreenState extends State<QrStayScreen> {
         final detail =
             await widget.api.fetchReservationDetail(widget.reservationId);
         final roomMap = (detail['room'] as Map<String, dynamic>?) ?? const {};
-        final hotelMap = (roomMap['hotel'] as Map<String, dynamic>?) ?? const {};
+        final hotelMap =
+            (roomMap['hotel'] as Map<String, dynamic>?) ?? const {};
         _roomInfo = RoomModel.fromJson(roomMap);
         _hotelInfo = HotelModel.fromJson(hotelMap);
-      } catch (_) {}
+      } on Object {
+        // Ignora fallo secundario
+      }
 
       List<RoomServiceOrder> orders = const [];
       try {
         orders = await widget.api.fetchRoomServiceOrders(widget.reservationId);
-      } catch (_) {}
+      } on Object {
+        // Ignora fallo secundario
+      }
 
       if (mounted) {
         setState(() {
@@ -127,7 +138,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
           _orders = orders;
         });
       }
-    } catch (e) {
+    } on Object catch (e) {
       if (mounted && !silent) {
         setState(() {
           _error = e.toString();
@@ -147,7 +158,9 @@ class _QrStayScreenState extends State<QrStayScreen> {
       final orders =
           await widget.api.fetchRoomServiceOrders(widget.reservationId);
       if (mounted) setState(() => _orders = orders);
-    } catch (_) {}
+    } on Object {
+      // Ignora fallo transitorio
+    }
   }
 
   Uint8List? _decodeQrPng(String dataUrl) {
@@ -215,10 +228,10 @@ class _QrStayScreenState extends State<QrStayScreen> {
           _hardwareFeedback = '🚗 ${res['message']}';
         });
       }
-    } catch (e) {
+    } on Object catch (e) {
       if (mounted) {
         setState(() {
-          _hardwareFeedback = '⚠️ FAAC: $e';
+          _hardwareFeedback = '⚠️ Barrera: $e';
         });
       }
     } finally {
@@ -240,7 +253,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
           _hardwareFeedback = '✅ [$label] ${res['message']}';
         });
       }
-    } catch (e) {
+    } on Object catch (e) {
       if (mounted) {
         setState(() {
           _hardwareFeedback = '🔒 [$label] Acceso denegado: $e';
@@ -258,7 +271,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
     List<RoomServiceItem> menu = [];
     try {
       menu = await widget.api.fetchHotelMenu(qr.hotelId);
-    } catch (e) {
+    } on Object catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo cargar el menú: $e')),
@@ -304,20 +317,20 @@ class _QrStayScreenState extends State<QrStayScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Expanded(
+                        Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                '🍾 Room Service Anónimo',
+                              const Text(
+                                '🍾 Room Service por Pasaplatos',
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w800,
                                 ),
                               ),
-                              SizedBox(height: 2),
+                              const SizedBox(height: 2),
                               Text(
-                                'Entrega discreta por pasaplatos/esclusa sin contacto visual.',
+                                'Entrega discreta en la esclusa de tu habitación.',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: AppTheme.textSecondary,
@@ -348,8 +361,8 @@ class _QrStayScreenState extends State<QrStayScreen> {
                               borderRadius: BorderRadius.circular(14),
                               border: Border.all(
                                 color: qty > 0
-                                    ? AppTheme.gold.withValues(alpha: 0.5)
-                                    : Colors.white.withValues(alpha: 0.06),
+                                    ? AppTheme.primary
+                                    : AppTheme.border,
                               ),
                             ),
                             child: Row(
@@ -369,7 +382,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                       if (item.description.isNotEmpty)
                                         Text(
                                           item.description,
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontSize: 11.5,
                                             color: AppTheme.textSecondary,
                                           ),
@@ -377,8 +390,8 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                       const SizedBox(height: 4),
                                       Text(
                                         '\$${item.priceUsd.toStringAsFixed(2)} USD',
-                                        style: const TextStyle(
-                                          color: AppTheme.gold,
+                                        style: TextStyle(
+                                          color: AppTheme.primary,
                                           fontWeight: FontWeight.w800,
                                           fontSize: 13,
                                         ),
@@ -413,9 +426,9 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                       onPressed: () => setModalState(() {
                                         cart[item.id] = qty + 1;
                                       }),
-                                      icon: const Icon(
+                                      icon: Icon(
                                         Icons.add_circle_rounded,
-                                        color: AppTheme.gold,
+                                        color: AppTheme.primary,
                                       ),
                                     ),
                                   ],
@@ -430,7 +443,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                     TextField(
                       controller: noteCtrl,
                       decoration: const InputDecoration(
-                        labelText: 'Nota opcional (ej: extra hielo en esclusa)',
+                        labelText: 'Nota opcional (ej: extra hielo)',
                         prefixIcon: Icon(Icons.notes_rounded),
                       ),
                     ),
@@ -453,7 +466,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                 if (ctx.mounted) {
                                   Navigator.of(ctx).pop(order);
                                 }
-                              } catch (err) {
+                              } on Object catch (err) {
                                 setModalState(() => submitting = false);
                                 if (context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
@@ -462,11 +475,11 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                 }
                               }
                             },
-                      icon: const Icon(Icons.flash_on_rounded),
+                      icon: const Icon(Icons.payments_outlined),
                       label: Text(
                         totalUsd <= 0
                             ? 'Selecciona productos del menú'
-                            : 'Pagar \$${totalUsd.toStringAsFixed(2)} USD con Pago Móvil BDV',
+                            : 'Pagar \$${totalUsd.toStringAsFixed(2)} USD con Pago Móvil',
                       ),
                     ),
                   ],
@@ -536,32 +549,20 @@ class _QrStayScreenState extends State<QrStayScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pase QR · Suite & FAAC'),
+        title: const Text('Mi Llave QR'),
         actions: [
-          IconButton(
-            tooltip: 'Probar alerta silenciosa ≤15 min',
-            onPressed: () => setState(
-              () => _simulateLowTimeAlert = !_simulateLowTimeAlert,
-            ),
-            icon: Icon(
-              Icons.notifications_active_outlined,
-              color: _simulateLowTimeAlert
-                  ? AppTheme.warning
-                  : AppTheme.textSecondary,
-              size: 20,
-            ),
-          ),
+          AppTheme.themeToggleButton(),
           IconButton(
             tooltip: 'Modo Camuflaje (Calculadora)',
             onPressed: StealthCalculatorScreen.enable,
-            icon: const Icon(
+            icon: Icon(
               Icons.calculate_outlined,
-              color: AppTheme.gold,
+              color: AppTheme.textSecondary,
               size: 20,
             ),
           ),
           IconButton(
-            tooltip: 'Rotar / Actualizar QR',
+            tooltip: 'Actualizar QR',
             onPressed: _loading ? null : () => _loadAll(),
             icon: const Icon(Icons.refresh_rounded),
           ),
@@ -576,7 +577,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                     child: Text(
                       _error!,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: AppTheme.danger),
+                      style: TextStyle(color: AppTheme.danger),
                     ),
                   ),
                 )
@@ -588,31 +589,82 @@ class _QrStayScreenState extends State<QrStayScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          if (qr?.isOfflineCached == true) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
+                              margin: const EdgeInsets.only(bottom: 12),
+                              decoration: BoxDecoration(
+                                color: Colors.blueAccent.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: Colors.blueAccent.withValues(alpha: 0.4),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.wifi_off_rounded,
+                                    color: Colors.blueAccent,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Modo Offline Activo · Resiliencia Criptográfica',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12.5,
+                                            color: Colors.blueAccent,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Tu llave QR local está firmada y sigue siendo 100% válida para el escáner del tótem y la puerta.',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: AppTheme.textSecondary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                           if (isAlertActive && qr != null) ...[
                             Container(
                               padding: const EdgeInsets.all(14),
                               margin: const EdgeInsets.only(bottom: 14),
                               decoration: BoxDecoration(
-                                color: AppTheme.warning.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(18),
+                                color: AppTheme.warning.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(16),
                                 border: Border.all(
-                                  color: AppTheme.warning.withValues(alpha: 0.55),
+                                  color:
+                                      AppTheme.warning.withValues(alpha: 0.45),
                                 ),
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Row(
+                                  Row(
                                     children: [
                                       Icon(
                                         Icons.timer_outlined,
                                         color: AppTheme.warning,
                                         size: 19,
                                       ),
-                                      SizedBox(width: 8),
+                                      const SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
-                                          'Alerta Silenciosa: ≤15 min para finalizar tu estadía',
+                                          'Quedan menos de 15 min de estadía',
                                           style: TextStyle(
                                             fontWeight: FontWeight.w800,
                                             color: AppTheme.warning,
@@ -623,8 +675,8 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                     ],
                                   ),
                                   const SizedBox(height: 6),
-                                  const Text(
-                                    '¿Deseas quedarte más tiempo sin interrupciones? Extiende en 1 toque o sal con tu vehículo (tienes +15 min de gracia en la barrera FAAC de salida).',
+                                  Text(
+                                    '¿Deseas quedarte más tiempo? Extiende con un toque o sal con tu vehículo (+15 min de gracia en barrera).',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: AppTheme.textSecondary,
@@ -640,7 +692,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                           ),
                                           onPressed: () =>
                                               _openExtendFlow(quickHours: 1),
-                                          child: const Text('+1 Hora Rápida'),
+                                          child: const Text('+1 Hora'),
                                         ),
                                       ),
                                       const SizedBox(width: 10),
@@ -648,16 +700,10 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                         child: OutlinedButton(
                                           style: OutlinedButton.styleFrom(
                                             minimumSize: const Size(0, 40),
-                                            side: const BorderSide(
-                                              color: AppTheme.gold,
-                                            ),
                                           ),
                                           onPressed: () =>
                                               _openExtendFlow(quickHours: 2),
-                                          child: const Text(
-                                            '+2 Horas',
-                                            style: TextStyle(color: AppTheme.gold),
-                                          ),
+                                          child: const Text('+2 Horas'),
                                         ),
                                       ),
                                     ],
@@ -667,28 +713,19 @@ class _QrStayScreenState extends State<QrStayScreen> {
                             ),
                           ],
 
-                          // Tarjeta VIP Boarding Pass + Modo Tótem FAAC
+                          // Tarjeta Principal de Pase QR
                           Container(
                             decoration: BoxDecoration(
                               color: _faacTotemHighContrast
                                   ? Colors.white
                                   : AppTheme.card,
-                              borderRadius: BorderRadius.circular(24),
+                              borderRadius: BorderRadius.circular(22),
                               border: Border.all(
                                 color: _faacTotemHighContrast
                                     ? AppTheme.cyan
-                                    : AppTheme.gold.withValues(alpha: 0.35),
-                                width: _faacTotemHighContrast ? 2.5 : 1.2,
+                                    : AppTheme.border,
+                                width: _faacTotemHighContrast ? 2 : 1,
                               ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: (_faacTotemHighContrast
-                                          ? Colors.white
-                                          : AppTheme.gold)
-                                      .withValues(alpha: 0.14),
-                                  blurRadius: 28,
-                                ),
-                              ],
                             ),
                             padding: const EdgeInsets.all(22),
                             child: Column(
@@ -729,17 +766,21 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                       ),
                                       decoration: BoxDecoration(
                                         color: _faacTotemHighContrast
-                                            ? Colors.black
+                                            ? const Color(0xFF1E2226)
                                             : AppTheme.surface,
                                         borderRadius: BorderRadius.circular(12),
                                       ),
                                       child: Text(
                                         '⏱ ${_formatCountdown(qr.validUntil)}',
-                                        style: const TextStyle(
-                                          fontFamily: 'monospace',
+                                        style: TextStyle(
+                                          fontFeatures: const [
+                                            FontFeature.tabularFigures(),
+                                          ],
                                           fontWeight: FontWeight.w800,
                                           fontSize: 13.5,
-                                          color: AppTheme.accent,
+                                          color: _faacTotemHighContrast
+                                              ? Colors.white
+                                              : AppTheme.accent,
                                         ),
                                       ),
                                     ),
@@ -749,35 +790,39 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                 if (pngBytes != null)
                                   Container(
                                     padding: EdgeInsets.all(
-                                      _faacTotemHighContrast ? 16 : 10,
+                                      _faacTotemHighContrast ? 16 : 12,
                                     ),
                                     decoration: BoxDecoration(
                                       color: Colors.white,
-                                      borderRadius: BorderRadius.circular(18),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color: Colors.black
+                                            .withValues(alpha: 0.08),
+                                      ),
                                     ),
                                     child: Image.memory(
                                       pngBytes,
-                                      width: _faacTotemHighContrast ? 268 : 228,
+                                      width: _faacTotemHighContrast ? 260 : 224,
                                       height:
-                                          _faacTotemHighContrast ? 268 : 228,
+                                          _faacTotemHighContrast ? 260 : 224,
                                       fit: BoxFit.contain,
                                     ),
                                   ),
                                 const SizedBox(height: 14),
                                 Text(
                                   _faacTotemHighContrast
-                                      ? '☀️ MODO TÓTEM EXTERIOR FAAC ACTIVO · Acerca el teléfono a 10–20 cm del lector vehicular'
-                                      : 'Válido en Barrera Vehicular FAAC y Puerta de Habitación hasta ${_formatDateTime(qr.validUntil)}',
+                                      ? '☀️ Alto brillo activo · Acerca el teléfono al lector de la barrera'
+                                      : 'Válido en Barrera Vehicular y Puerta hasta ${_formatDateTime(qr.validUntil)}',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 12.5,
                                     fontWeight: FontWeight.w600,
                                     color: _faacTotemHighContrast
                                         ? Colors.black87
                                         : AppTheme.accent,
                                   ),
                                 ),
-                                const SizedBox(height: 12),
+                                const SizedBox(height: 10),
                                 SwitchListTile.adaptive(
                                   dense: true,
                                   contentPadding: EdgeInsets.zero,
@@ -787,7 +832,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                     () => _faacTotemHighContrast = v,
                                   ),
                                   title: Text(
-                                    'Modo Tótem FAAC (Alto Contraste / Sol)',
+                                    'Modo Lector Exterior (Alto Contraste)',
                                     style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w700,
@@ -797,9 +842,9 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                     ),
                                   ),
                                   subtitle: Text(
-                                    'Maximiza contraste blanco puro para lectores ópticos de pedestal vehicular',
+                                    'Útil bajo luz del sol frente a la barrera vehicular',
                                     style: TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 11.5,
                                       color: _faacTotemHighContrast
                                           ? Colors.black54
                                           : AppTheme.textSecondary,
@@ -816,9 +861,9 @@ class _QrStayScreenState extends State<QrStayScreen> {
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
                                 color: AppTheme.cyan.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(14),
                                 border: Border.all(
-                                  color: AppTheme.cyan.withValues(alpha: 0.4),
+                                  color: AppTheme.cyan.withValues(alpha: 0.35),
                                 ),
                               ),
                               child: Text(
@@ -832,7 +877,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                             ),
                           ],
 
-                          // Control Vehicular FAAC
+                          // Control Rápido de Barreras Vehiculares
                           const SizedBox(height: 16),
                           Card(
                             child: Padding(
@@ -842,7 +887,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                 children: [
                                   Row(
                                     children: [
-                                      const Icon(
+                                      Icon(
                                         Icons.directions_car_filled_rounded,
                                         color: AppTheme.cyan,
                                       ),
@@ -853,16 +898,16 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                               CrossAxisAlignment.start,
                                           children: [
                                             const Text(
-                                              'Barreras Vehiculares FAAC',
+                                              'Acceso Vehicular Rápido',
                                               style: TextStyle(
                                                 fontWeight: FontWeight.w800,
                                                 fontSize: 15.5,
                                               ),
                                             ),
                                             Text(
-                                              '${qr.faacModel} · Pulso seco OPEN-A + GND',
-                                              style: const TextStyle(
-                                                fontSize: 11.5,
+                                              'Abre la barrera desde tu teléfono al llegar o salir',
+                                              style: TextStyle(
+                                                fontSize: 12,
                                                 color: AppTheme.textSecondary,
                                               ),
                                             ),
@@ -878,7 +923,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                         child: ElevatedButton.icon(
                                           style: ElevatedButton.styleFrom(
                                             backgroundColor: AppTheme.cyan,
-                                            foregroundColor: Colors.black,
+                                            foregroundColor: Colors.white,
                                             minimumSize: const Size(0, 44),
                                           ),
                                           onPressed: _busyAction
@@ -897,67 +942,17 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                         child: OutlinedButton.icon(
                                           style: OutlinedButton.styleFrom(
                                             minimumSize: const Size(0, 44),
-                                            side: const BorderSide(
-                                              color: AppTheme.cyan,
-                                            ),
                                           ),
                                           onPressed: _busyAction
                                               ? null
                                               : () =>
                                                   _triggerRemoteFaac('EXIT'),
-                                          icon: const Icon(
+                                          icon: Icon(
                                             Icons.logout_rounded,
                                             size: 18,
                                             color: AppTheme.cyan,
                                           ),
-                                          label: const Text(
-                                            'Abrir Salida',
-                                            style: TextStyle(
-                                              color: AppTheme.cyan,
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextButton.icon(
-                                          onPressed: _busyAction
-                                              ? null
-                                              : () => _simulateScanOnDevice(
-                                                    qr.faacEntryDevice,
-                                                    'Tótem FAAC',
-                                                  ),
-                                          icon: const Icon(
-                                            Icons.qr_code_scanner_rounded,
-                                            size: 16,
-                                          ),
-                                          label: const Text(
-                                            'Simular Tótem FAAC',
-                                            style: TextStyle(fontSize: 12),
-                                          ),
-                                        ),
-                                      ),
-                                      Expanded(
-                                        child: TextButton.icon(
-                                          onPressed: _busyAction
-                                              ? null
-                                              : () => _simulateScanOnDevice(
-                                                    'lock-room-${qr.roomName}',
-                                                    'Puerta Suite',
-                                                  ),
-                                          icon: const Icon(
-                                            Icons.sensor_door_outlined,
-                                            size: 16,
-                                          ),
-                                          label: const Text(
-                                            'Simular Puerta Suite',
-                                            style: TextStyle(fontSize: 12),
-                                          ),
+                                          label: const Text('Abrir Salida'),
                                         ),
                                       ),
                                     ],
@@ -967,7 +962,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                             ),
                           ),
 
-                          // Room Service Anónimo por Pasaplatos
+                          // Room Service por Pasaplatos
                           const SizedBox(height: 14),
                           Card(
                             child: Padding(
@@ -979,15 +974,15 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                     mainAxisAlignment:
                                         MainAxisAlignment.spaceBetween,
                                     children: [
-                                      const Row(
+                                      Row(
                                         children: [
                                           Icon(
                                             Icons.room_service_outlined,
-                                            color: AppTheme.gold,
+                                            color: AppTheme.primary,
                                           ),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            'Consumos por Pasaplatos',
+                                          const SizedBox(width: 8),
+                                          const Text(
+                                            'Pedidos a la Habitación',
                                             style: TextStyle(
                                               fontWeight: FontWeight.w800,
                                               fontSize: 15.5,
@@ -1001,12 +996,12 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                           Icons.add_shopping_cart_rounded,
                                           size: 17,
                                         ),
-                                        label: const Text('Ver Menú'),
+                                        label: const Text('Pedir'),
                                       ),
                                     ],
                                   ),
-                                  const Text(
-                                    'Pide bebidas, snacks o kits desde tu habitación con Pago Móvil BDV y recíbelos en la esclusa sin ver a nadie.',
+                                  Text(
+                                    'Solicita bebidas o snacks con Pago Móvil y recíbelos por el pasaplatos.',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: AppTheme.textSecondary,
@@ -1025,8 +1020,10 @@ class _QrStayScreenState extends State<QrStayScreen> {
                                             Expanded(
                                               child: Text(
                                                 ord.items
-                                                    .map((i) =>
-                                                        '${i['qty']}x ${i['name']}')
+                                                    .map(
+                                                      (i) =>
+                                                          '${i['qty']}x ${i['name']}',
+                                                    )
                                                     .join(', '),
                                                 style: const TextStyle(
                                                   fontSize: 12.5,
@@ -1080,29 +1077,7 @@ class _QrStayScreenState extends State<QrStayScreen> {
                           ElevatedButton.icon(
                             onPressed: () => _openExtendFlow(),
                             icon: const Icon(Icons.more_time_rounded),
-                            label: const Text(
-                              'Extender Estadía (+1h, +2h...) en Privado',
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          OutlinedButton.icon(
-                            onPressed: () async {
-                              await Clipboard.setData(
-                                ClipboardData(text: qr.rawToken),
-                              );
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    'Token QR copiado para probar en el Kiosco FAAC / Puerta (:8083).',
-                                  ),
-                                ),
-                              );
-                            },
-                            icon: const Icon(Icons.copy_rounded, size: 18),
-                            label: const Text(
-                              'Copiar Token QR para Kiosco FAAC / Puerta',
-                            ),
+                            label: const Text('Extender Tiempo de Estadía'),
                           ),
                           const SizedBox(height: 10),
                           OutlinedButton.icon(
@@ -1114,8 +1089,111 @@ class _QrStayScreenState extends State<QrStayScreen> {
                               Icons.exit_to_app_rounded,
                               size: 18,
                             ),
-                            label: const Text(
-                              'Finalizar Estadía (Check-out y revocar QR)',
+                            label: const Text('Finalizar Estadía (Check-out)'),
+                          ),
+
+                          const SizedBox(height: 14),
+                          // Herramientas de prueba colapsadas para mantener una UI limpia
+                          Card(
+                            child: ExpansionTile(
+                              shape: const Border(),
+                              leading: Icon(
+                                Icons.science_outlined,
+                                size: 19,
+                                color: AppTheme.textSecondary,
+                              ),
+                              title: Text(
+                                'Opciones de Prueba y Simulación',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.textSecondary,
+                                ),
+                              ),
+                              childrenPadding: const EdgeInsets.fromLTRB(
+                                16,
+                                0,
+                                16,
+                                14,
+                              ),
+                              children: [
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    OutlinedButton.icon(
+                                      style: OutlinedButton.styleFrom(
+                                        minimumSize: const Size(140, 38),
+                                      ),
+                                      onPressed: _busyAction
+                                          ? null
+                                          : () => _simulateScanOnDevice(
+                                                qr.faacEntryDevice,
+                                                'Tótem FAAC',
+                                              ),
+                                      icon: const Icon(
+                                        Icons.qr_code_scanner_rounded,
+                                        size: 16,
+                                      ),
+                                      label: const Text('Simular Lector FAAC'),
+                                    ),
+                                    OutlinedButton.icon(
+                                      style: OutlinedButton.styleFrom(
+                                        minimumSize: const Size(140, 38),
+                                      ),
+                                      onPressed: _busyAction
+                                          ? null
+                                          : () => _simulateScanOnDevice(
+                                                'lock-room-${qr.roomName}',
+                                                'Puerta Suite',
+                                              ),
+                                      icon: const Icon(
+                                        Icons.sensor_door_outlined,
+                                        size: 16,
+                                      ),
+                                      label: const Text('Simular Puerta Suite'),
+                                    ),
+                                    OutlinedButton.icon(
+                                      style: OutlinedButton.styleFrom(
+                                        minimumSize: const Size(140, 38),
+                                      ),
+                                      onPressed: () => setState(
+                                        () => _simulateLowTimeAlert =
+                                            !_simulateLowTimeAlert,
+                                      ),
+                                      icon: const Icon(
+                                        Icons.notifications_active_outlined,
+                                        size: 16,
+                                      ),
+                                      label: const Text('Probar Alerta ≤15m'),
+                                    ),
+                                    OutlinedButton.icon(
+                                      style: OutlinedButton.styleFrom(
+                                        minimumSize: const Size(140, 38),
+                                      ),
+                                      onPressed: () async {
+                                        await Clipboard.setData(
+                                          ClipboardData(text: qr.rawToken),
+                                        );
+                                        if (!context.mounted) return;
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Token QR copiado al portapapeles.',
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      icon: const Icon(
+                                        Icons.copy_rounded,
+                                        size: 16,
+                                      ),
+                                      label: const Text('Copiar Token QR'),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
                           ),
                         ],

@@ -14,6 +14,10 @@ async function hotelsRoutes(fastify) {
     preHandler: [fastify.authenticate, fastify.authorizeCleaningOrOwner],
   }, ctrl.handleCleaningBoard)
 
+  fastify.get('/:id/reception-board', {
+    preHandler: [fastify.authenticate, fastify.authorizeReceptionistOrOwner],
+  }, ctrl.handleReceptionBoard)
+
   fastify.put('/:id/operations', {
     preHandler: [fastify.authenticate, fastify.authorizeOwner],
   }, ctrl.handleUpdateOperations)

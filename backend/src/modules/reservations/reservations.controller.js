@@ -106,26 +106,6 @@ async function handleCreate(request, reply) {
     return reply.status(409).send({ message: 'Habitación no disponible' })
   }
 
-  // Ignorar pedidos auxiliares de Room Service al evaluar disponibilidad física de la habitación
-  const conflict = await prisma.reservation.findFirst({
-    where: {
-      roomId,
-      status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PAYMENT_PENDING_REVIEW'] },
-      OR: [
-        { notes: null },
-        { NOT: { notes: { startsWith: ROOM_SERVICE_PREFIX } } },
-      ],
-      AND: [
-        { checkIn: { lt: checkOutDate.toDate() } },
-        { checkOut: { gt: checkInDate.toDate() } },
-      ],
-    },
-  })
-
-  if (conflict) {
-    return reply.status(409).send({ message: 'La habitación ya está reservada en ese horario' })
-  }
-
   const totalAmount = durationHours >= 24
     ? Number(room.pricePerNight)
     : Number(room.pricePerHour) * durationHours
@@ -136,6 +116,43 @@ async function handleCreate(request, reply) {
   const expiresAt = dayjs().add(env.PAYMENT_HOLD_MINUTES, 'minute').toDate()
 
   const result = await prisma.$transaction(async (tx) => {
+    // Bloqueo pesimista a nivel de fila en PostgreSQL para evitar carreras de reserva simultáneas
+    try {
+      await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${roomId}::uuid FOR UPDATE`
+    } catch (_) {}
+
+    const currentRoom = await tx.room.findUnique({
+      where: { id: roomId },
+      select: { status: true },
+    })
+    if (!currentRoom || currentRoom.status !== 'AVAILABLE') {
+      const err = new Error('Habitación no disponible')
+      err.statusCode = 409
+      throw err
+    }
+
+    // Verificación atómica de solapamiento dentro de la transacción
+    const conflict = await tx.reservation.findFirst({
+      where: {
+        roomId,
+        status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PAYMENT_PENDING_REVIEW'] },
+        OR: [
+          { notes: null },
+          { NOT: { notes: { startsWith: ROOM_SERVICE_PREFIX } } },
+        ],
+        AND: [
+          { checkIn: { lt: checkOutDate.toDate() } },
+          { checkOut: { gt: checkInDate.toDate() } },
+        ],
+      },
+    })
+
+    if (conflict) {
+      const err = new Error('La habitación ya está reservada en ese horario')
+      err.statusCode = 409
+      throw err
+    }
+
     const amountVes = await allocateUniqueAmountVes(tx, room.hotel.id, baseAmountVes)
 
     const reservation = await tx.reservation.create({
@@ -226,28 +243,6 @@ async function handleExtend(request, reply) {
   const extStart = dayjs(parent.checkOut)
   const extEnd = extStart.add(extraHours, 'hour')
 
-  const conflict = await prisma.reservation.findFirst({
-    where: {
-      roomId: parent.roomId,
-      id: { not: parent.id },
-      status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PAYMENT_PENDING_REVIEW'] },
-      OR: [
-        { notes: null },
-        { NOT: { notes: { startsWith: ROOM_SERVICE_PREFIX } } },
-      ],
-      AND: [
-        { checkIn: { lt: extEnd.toDate() } },
-        { checkOut: { gt: extStart.toDate() } },
-      ],
-    },
-  })
-
-  if (conflict) {
-    return reply.status(409).send({
-      message: 'No es posible extender: existe otra solicitud o reserva en el horario siguiente',
-    })
-  }
-
   const room = parent.room
   const extraAmountUsd = extraHours >= 24
     ? Number(room.pricePerNight)
@@ -259,6 +254,34 @@ async function handleExtend(request, reply) {
   const expiresAt = dayjs().add(env.PAYMENT_HOLD_MINUTES, 'minute').toDate()
 
   const result = await prisma.$transaction(async (tx) => {
+    // Bloqueo pesimista a nivel de fila para evitar extensiones o reservas concurrentes solapadas
+    try {
+      await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${room.id}::uuid FOR UPDATE`
+    } catch (_) {}
+
+    // Verificación atómica de solapamiento dentro de la transacción
+    const conflict = await tx.reservation.findFirst({
+      where: {
+        roomId: parent.roomId,
+        id: { not: parent.id },
+        status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PAYMENT_PENDING_REVIEW'] },
+        OR: [
+          { notes: null },
+          { NOT: { notes: { startsWith: ROOM_SERVICE_PREFIX } } },
+        ],
+        AND: [
+          { checkIn: { lt: extEnd.toDate() } },
+          { checkOut: { gt: extStart.toDate() } },
+        ],
+      },
+    })
+
+    if (conflict) {
+      const err = new Error('No es posible extender: existe otra solicitud o reserva en el horario siguiente')
+      err.statusCode = 409
+      throw err
+    }
+
     const amountVes = await allocateUniqueAmountVes(tx, room.hotel.id, baseAmountVes)
 
     const extReservation = await tx.reservation.create({

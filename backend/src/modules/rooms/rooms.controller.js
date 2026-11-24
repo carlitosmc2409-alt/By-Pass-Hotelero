@@ -12,6 +12,7 @@ const createRoomSchema = z.object({
   pricePerNight: z.number().positive(),
   currency: z.string().default('USD'),
   amenities: z.array(z.string()).default([]),
+  photos: z.array(z.string()).max(12).optional(),
   maxGuests: z.number().int().min(1).max(10).default(2),
   sortOrder: z.number().int().default(0),
 })
@@ -49,14 +50,33 @@ async function handleUpdate(request, reply) {
     include: { hotel: true },
   })
 
-  if (!room || room.hotel.ownerId !== request.user.id) {
-    return reply.status(403).send({ message: 'Sin acceso' })
+  const isOwner = request.user.role === 'OWNER' && room?.hotel?.ownerId === request.user.id
+  if (!room || !isOwner) {
+    return reply.status(403).send({ message: 'Sin acceso a esta habitación' })
   }
 
   const updated = await prisma.room.update({
     where: { id: request.params.id },
     data,
   })
+
+  emitRealtimeEvent({
+    hotelId: room.hotelId,
+    type: 'ROOM_STATUS_CHANGED',
+    payload: {
+      roomId: updated.id,
+      roomName: updated.name,
+      status: updated.status,
+      updatedByRole: request.user.role,
+    },
+    cleaningSafePayload: {
+      roomId: updated.id,
+      roomName: updated.name,
+      status: updated.status,
+      updatedByRole: request.user.role,
+    },
+  })
+
   return reply.send(updated)
 }
 
@@ -71,8 +91,20 @@ async function handleUpdateStatus(request, reply) {
     include: { hotel: true },
   })
 
-  if (!room || room.hotel.ownerId !== request.user.id) {
-    return reply.status(403).send({ message: 'Sin acceso' })
+  const isOwner = request.user.role === 'OWNER' && room?.hotel?.ownerId === request.user.id
+  const isReceptionist = request.user.role === 'RECEPTIONIST' && request.user.hotelId === room?.hotelId
+  const isCleaning = request.user.role === 'CLEANING' && request.user.hotelId === room?.hotelId
+
+  if (!room || (!isOwner && !isReceptionist && !isCleaning)) {
+    return reply.status(403).send({ message: 'Sin acceso a esta habitación' })
+  }
+
+  // Personal de limpieza no puede forzar liberación de habitación ocupada ni deshabilitarla
+  if (isCleaning && room.status === 'OCCUPIED') {
+    return reply.status(400).send({ message: 'No se puede alterar una habitación ocupada desde el panel de limpieza' })
+  }
+  if (isCleaning && !['AVAILABLE', 'CLEANING', 'MAINTENANCE'].includes(status)) {
+    return reply.status(400).send({ message: 'Estado no permitido para personal de limpieza' })
   }
 
   const updated = await prisma.$transaction(async (tx) => {
@@ -103,8 +135,18 @@ async function handleUpdateStatus(request, reply) {
   emitRealtimeEvent({
     hotelId: room.hotelId,
     type: 'ROOM_STATUS_CHANGED',
-    payload: { roomId: room.id, roomName: room.name, status },
-    cleaningSafePayload: { roomId: room.id, roomName: room.name, status },
+    payload: {
+      roomId: room.id,
+      roomName: room.name,
+      status,
+      updatedByRole: request.user.role,
+    },
+    cleaningSafePayload: {
+      roomId: room.id,
+      roomName: room.name,
+      status,
+      updatedByRole: request.user.role,
+    },
   })
 
   return reply.send(updated)
@@ -113,7 +155,7 @@ async function handleUpdateStatus(request, reply) {
 // PATCH /api/v1/rooms/:id/cleaning-status  — Personal CLEANING habilita hab limpia o reporta avería
 async function handleCleaningStatusUpdate(request, reply) {
   const { status } = z.object({
-    status: z.enum(['AVAILABLE', 'MAINTENANCE']),
+    status: z.enum(['AVAILABLE', 'CLEANING', 'MAINTENANCE']),
   }).parse(request.body)
 
   const room = await prisma.room.findUnique({
@@ -123,8 +165,9 @@ async function handleCleaningStatusUpdate(request, reply) {
   if (!room) return reply.status(404).send({ message: 'Habitación no encontrada' })
 
   const isOwner = request.user.role === 'OWNER' && room.hotel.ownerId === request.user.id
+  const isReceptionist = request.user.role === 'RECEPTIONIST' && request.user.hotelId === room.hotelId
   const isCleaning = request.user.role === 'CLEANING' && request.user.hotelId === room.hotelId
-  if (!isOwner && !isCleaning) {
+  if (!isOwner && !isCleaning && !isReceptionist) {
     return reply.status(403).send({ message: 'Sin permiso operativo sobre esta habitación' })
   }
 

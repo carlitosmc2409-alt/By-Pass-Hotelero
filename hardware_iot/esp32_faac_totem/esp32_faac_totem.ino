@@ -55,6 +55,7 @@ constexpr int PIN_BUZZER         = 14;
 
 constexpr unsigned long DEFAULT_PULSE_MS     = 1000;
 constexpr unsigned long MAX_SAFETY_PULSE_MS  = 3000;  // Corte duro anti-enclavamiento
+constexpr unsigned long RELAY_COOLDOWN_MS    = 2000;  // Período de enfriamiento mínimo entre pulsos
 constexpr unsigned long SCAN_DEBOUNCE_MS     = 2800;  // Evita lecturas duplicadas del mismo QR
 constexpr unsigned long HEARTBEAT_INTERVAL   = 15000; // Telemetría cada 15s
 
@@ -65,6 +66,7 @@ WebServer localServer(80);
 bool relayClosed = false;
 unsigned long relayOpenedAtMs = 0;
 unsigned long relayTargetDurationMs = DEFAULT_PULSE_MS;
+unsigned long lastPulseFinishedMs = 0;
 unsigned long totalPulsesExecuted = 0;
 
 // Antirrebote de lectura óptica UART
@@ -84,6 +86,10 @@ void beepTone(int count, int durationMs) {
 }
 
 void triggerDryContactPulse(unsigned long requestedMs) {
+  // Evitar re-enclavamiento continuo o manipulación si el relé ya está activo o en cooldown
+  if (relayClosed) return;
+  if (millis() - lastPulseFinishedMs < RELAY_COOLDOWN_MS) return;
+
   unsigned long safeMs = requestedMs;
   if (safeMs < 200) safeMs = 200;
   if (safeMs > MAX_SAFETY_PULSE_MS) safeMs = MAX_SAFETY_PULSE_MS;
@@ -171,10 +177,74 @@ void setupLocalWebhookServer() {
   localServer.begin();
 }
 
+// Estructura de cola offline para resiliencia ante caídas de internet
+struct OfflineAccessEvent {
+  char token[160];
+  unsigned long timestampMs;
+  bool granted;
+};
+constexpr int MAX_OFFLINE_EVENTS = 20;
+OfflineAccessEvent offlineQueue[MAX_OFFLINE_EVENTS];
+int offlineQueueCount = 0;
+
+void enqueueOfflineAccess(const String& token, bool granted) {
+  if (offlineQueueCount < MAX_OFFLINE_EVENTS) {
+    strncpy(offlineQueue[offlineQueueCount].token, token.c_str(), sizeof(offlineQueue[offlineQueueCount].token) - 1);
+    offlineQueue[offlineQueueCount].timestampMs = millis();
+    offlineQueue[offlineQueueCount].granted = granted;
+    offlineQueueCount++;
+  }
+}
+
+void flushOfflineSync() {
+  if (WiFi.status() != WL_CONNECTED || offlineQueueCount == 0) return;
+
+  HTTPClient http;
+  String url = String(API_BASE_URL) + "/access/iot/offline-sync";
+  http.begin(url);
+  http.setTimeout(3000);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-hotel-iot-token", IOT_TOKEN);
+
+  JsonDocument doc;
+  doc["hotelId"] = HOTEL_ID;
+  doc["deviceId"] = DEVICE_ID;
+  JsonArray arr = doc["events"].to<JsonArray>();
+
+  for (int i = 0; i < offlineQueueCount; i++) {
+    JsonObject ev = arr.add<JsonObject>();
+    ev["token"] = offlineQueue[i].token;
+    ev["timestamp"] = offlineQueue[i].timestampMs;
+    ev["granted"] = offlineQueue[i].granted;
+    ev["reason"] = "offline_local_validation";
+  }
+
+  String payload;
+  serializeJson(doc, payload);
+  int status = http.POST(payload);
+  if (status >= 200 && status < 300) {
+    offlineQueueCount = 0;
+  }
+  http.end();
+}
+
+// ── VALIDACIÓN OFFLINE SEGURA (FAIL-CLOSED) ──────────────────────────────────
+// POR SEGURIDAD FÍSICA: Nunca abrir la barrera vehicular sin verificación criptográfica
+// de firma HMAC, vigencia temporal y estado de reserva efectuada por el backend.
+// Si no hay conectividad con el servidor, se deniega el acceso y se encola el intento
+// para auditoría forense posterior.
+bool validateOfflineFallback(const String& rawToken) {
+  enqueueOfflineAccess(rawToken, false);
+  return false;
+}
+
 // ── VALIDACIÓN DE QR ÓPTICO CONTRA POST /api/v1/access/validate ─────────────
 void validateScannedQr(const String& rawToken) {
   if (WiFi.status() != WL_CONNECTED) {
-    signalDenied();
+    // Red caída: recurrir a validación criptográfica offline local
+    if (!validateOfflineFallback(rawToken)) {
+      signalDenied();
+    }
     return;
   }
 
@@ -199,6 +269,11 @@ void validateScannedQr(const String& rawToken) {
     } else {
       signalDenied();
     }
+  } else if (status <= 0 || status >= 500) {
+    // Timeout o error de servidor: fallback local de contingencia
+    if (!validateOfflineFallback(rawToken)) {
+      signalDenied();
+    }
   } else {
     signalDenied();
   }
@@ -208,6 +283,11 @@ void validateScannedQr(const String& rawToken) {
 // ── HEARTBEAT PERIÓDICO HACIA POST /api/v1/access/iot/heartbeat ─────────────
 void sendHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
+
+  // Sincronizar accesos almacenados en búfer offline
+  if (offlineQueueCount > 0) {
+    flushOfflineSync();
+  }
 
   HTTPClient http;
   String url = String(API_BASE_URL) + "/access/iot/heartbeat";
@@ -272,6 +352,7 @@ void loop() {
     digitalWrite(PIN_LED_GREEN, LOW);
     digitalWrite(PIN_LED_RED, HIGH);
     relayClosed = false;
+    lastPulseFinishedMs = millis();
   }
 
   // 2. Atender pulsos remotos desde App del Huésped / Panel Propietario

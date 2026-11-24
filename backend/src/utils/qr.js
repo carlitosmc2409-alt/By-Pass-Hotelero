@@ -358,6 +358,44 @@ async function validateQrToken(rawToken, deviceId = null) {
       faacConfig,
       triggeredBy: 'QR_TOTEM',
     })
+
+    // Al escanear la salida en el tótem FAAC, el cliente abandona el establecimiento:
+    // Se completa la estadía, se desactiva el QR y la habitación pasa a 'Requiere Limpieza' (CLEANING)
+    if (isFaacExit) {
+      await prisma.$transaction([
+        prisma.reservation.update({
+          where: { id: accessToken.reservationId },
+          data: { status: 'COMPLETED', checkOut: new Date() },
+        }),
+        prisma.accessToken.update({
+          where: { id: accessToken.id },
+          data: { isActive: false },
+        }),
+        prisma.room.update({
+          where: { id: room.id },
+          data: { status: 'CLEANING' },
+        }),
+      ])
+
+      emitRealtimeEvent({
+        hotelId: room.hotel.id,
+        guestId: accessToken.reservation.guestId,
+        reservationId: accessToken.reservationId,
+        type: 'ROOM_STATUS_CHANGED',
+        payload: {
+          roomId: room.id,
+          roomName: room.name,
+          status: 'CLEANING',
+          reason: 'FAAC_EXIT_TOTEM_SCAN',
+        },
+        cleaningSafePayload: {
+          roomId: room.id,
+          roomName: room.name,
+          status: 'CLEANING',
+          reason: 'FAAC_EXIT_TOTEM_SCAN',
+        },
+      })
+    }
   } else {
     emitRealtimeEvent({
       hotelId: room.hotel.id,

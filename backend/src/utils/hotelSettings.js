@@ -70,16 +70,21 @@ function normalizeHotelSettings(rawSettings) {
     ? base.cleaningStaff
     : []
 
+  const receptionStaff = Array.isArray(base.receptionStaff)
+    ? base.receptionStaff
+    : []
+
   return {
     ...base,
     faac,
     roomServiceMenu,
     cleaningStaff,
+    receptionStaff,
   }
 }
 
-function sanitizeStaffList(cleaningStaff = []) {
-  return cleaningStaff.map(({ pinHash, ...rest }) => rest)
+function sanitizeStaffList(staff = []) {
+  return staff.map(({ pinHash, passwordHash, ...rest }) => rest)
 }
 
 module.exports = {

@@ -18,6 +18,10 @@ class ApiException implements Exception {
 class ApiClient {
   static const _kAccessKey = 'staypass_guest_access_token';
   static const _kRefreshKey = 'staypass_guest_refresh_token';
+  static const _kRoleKey = 'staypass_user_role';
+  static const _kHotelIdKey = 'staypass_staff_hotel_id';
+  static const _kHotelNameKey = 'staypass_staff_hotel_name';
+  static const _kStaffNameKey = 'staypass_staff_name';
   static const _kCustomApiUrlKey = 'staypass_custom_api_url';
 
   static const String _compiledBaseUrl = String.fromEnvironment(
@@ -47,9 +51,17 @@ class ApiClient {
 
   String? _accessToken;
   String? _refreshToken;
+  String _currentRole = 'GUEST';
+  String? _currentHotelId;
+  String? _currentHotelName;
+  String? _staffName;
 
   String? get accessToken => _accessToken;
   bool get hasToken => _accessToken != null && _accessToken!.isNotEmpty;
+  String get currentRole => _currentRole;
+  String? get currentHotelId => _currentHotelId;
+  String? get currentHotelName => _currentHotelName;
+  String? get staffName => _staffName;
 
   void setAccessToken(String? token) {
     _accessToken = token;
@@ -68,6 +80,11 @@ class ApiClient {
       }
       final access = prefs.getString(_kAccessKey);
       final refresh = prefs.getString(_kRefreshKey);
+      _currentRole = prefs.getString(_kRoleKey) ?? 'GUEST';
+      _currentHotelId = prefs.getString(_kHotelIdKey);
+      _currentHotelName = prefs.getString(_kHotelNameKey);
+      _staffName = prefs.getString(_kStaffNameKey);
+
       if (access != null && access.isNotEmpty) {
         _accessToken = access;
         _refreshToken = refresh;
@@ -77,23 +94,61 @@ class ApiClient {
     return false;
   }
 
-  Future<void> _persistTokens(String access, String? refresh) async {
+  Future<void> _persistTokens(
+    String access,
+    String? refresh, {
+    String role = 'GUEST',
+    String? hotelId,
+    String? hotelName,
+    String? staffName,
+  }) async {
     _accessToken = access;
     if (refresh != null) _refreshToken = refresh;
+    _currentRole = role;
+    _currentHotelId = hotelId;
+    _currentHotelName = hotelName;
+    _staffName = staffName;
+
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_kAccessKey, access);
+      await prefs.setString(_kRoleKey, role);
       if (refresh != null) {
         await prefs.setString(_kRefreshKey, refresh);
+      } else {
+        await prefs.remove(_kRefreshKey);
+      }
+      if (hotelId != null) {
+        await prefs.setString(_kHotelIdKey, hotelId);
+      } else {
+        await prefs.remove(_kHotelIdKey);
+      }
+      if (hotelName != null) {
+        await prefs.setString(_kHotelNameKey, hotelName);
+      } else {
+        await prefs.remove(_kHotelNameKey);
+      }
+      if (staffName != null) {
+        await prefs.setString(_kStaffNameKey, staffName);
+      } else {
+        await prefs.remove(_kStaffNameKey);
       }
     } catch (_) {}
   }
 
   Future<void> _clearStoredTokens() async {
+    _currentRole = 'GUEST';
+    _currentHotelId = null;
+    _currentHotelName = null;
+    _staffName = null;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_kAccessKey);
       await prefs.remove(_kRefreshKey);
+      await prefs.remove(_kRoleKey);
+      await prefs.remove(_kHotelIdKey);
+      await prefs.remove(_kHotelNameKey);
+      await prefs.remove(_kStaffNameKey);
     } catch (_) {}
   }
 
@@ -308,8 +363,70 @@ class ApiClient {
     final data = await _decodeObj(res);
     final token = data['accessToken'] as String;
     final refresh = data['refreshToken'] as String?;
-    await _persistTokens(token, refresh);
+    await _persistTokens(token, refresh, role: 'GUEST');
     return token;
+  }
+
+  Future<Map<String, dynamic>> loginReceptionist({
+    required String hotelCode,
+    required String username,
+    required String password,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/auth/receptionist/login'),
+      headers: _headers(),
+      body: jsonEncode({
+        'hotelCode': hotelCode,
+        'username': username,
+        'password': password,
+      }),
+    );
+    final data = await _decodeObj(res);
+    final token = data['accessToken'] as String;
+    final hotelId = data['hotelId'] as String;
+    final hotelName = data['hotelName'] as String? ?? 'Hotel';
+    final user = data['username'] as String? ?? username;
+
+    await _persistTokens(
+      token,
+      null,
+      role: 'RECEPTIONIST',
+      hotelId: hotelId,
+      hotelName: hotelName,
+      staffName: user,
+    );
+    return data;
+  }
+
+  Future<Map<String, dynamic>> loginCleaningStaff({
+    required String hotelCode,
+    required String alias,
+    required String pin,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/auth/cleaning/login'),
+      headers: _headers(),
+      body: jsonEncode({
+        'hotelCode': hotelCode,
+        'alias': alias,
+        'pin': pin,
+      }),
+    );
+    final data = await _decodeObj(res);
+    final token = data['accessToken'] as String;
+    final hotelId = data['hotelId'] as String;
+    final hotelName = data['hotelName'] as String? ?? 'Hotel';
+    final staff = data['staffName'] as String? ?? alias;
+
+    await _persistTokens(
+      token,
+      null,
+      role: 'CLEANING',
+      hotelId: hotelId,
+      hotelName: hotelName,
+      staffName: staff,
+    );
+    return data;
   }
 
   Future<GuestProfile> fetchGuestProfile() async {
@@ -488,14 +605,68 @@ class ApiClient {
   }
 
   Future<QrAccessData> fetchQrAccess(String reservationId) async {
+    final cacheKey = 'offline_qr_$reservationId';
+    try {
+      final res = await _authorizedSend(
+        () => http.get(
+          Uri.parse('$baseUrl/access/qr/$reservationId'),
+          headers: _headers(jsonBody: false),
+        ),
+      );
+      final data = await _decodeObj(res);
+      final qr = QrAccessData.fromJson(data);
+
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(cacheKey, jsonEncode(qr.toJson()));
+      } catch (_) {}
+
+      return qr;
+    } catch (e) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final cachedStr = prefs.getString(cacheKey);
+        if (cachedStr != null && cachedStr.isNotEmpty) {
+          final cachedMap = jsonDecode(cachedStr) as Map<String, dynamic>;
+          final cachedQr = QrAccessData.fromJson({
+            ...cachedMap,
+            'isOfflineCached': true,
+          });
+          if (DateTime.now().isBefore(cachedQr.validUntil)) {
+            return cachedQr;
+          }
+        }
+      } catch (_) {}
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> submitReview({
+    required String reservationId,
+    required int rating,
+    List<String> tags = const [],
+    String comment = '',
+  }) async {
     final res = await _authorizedSend(
-      () => http.get(
-        Uri.parse('$baseUrl/access/qr/$reservationId'),
-        headers: _headers(jsonBody: false),
+      () => http.post(
+        Uri.parse('$baseUrl/reviews/reservation/$reservationId'),
+        headers: _headers(),
+        body: jsonEncode({
+          'rating': rating,
+          'tags': tags,
+          'comment': comment,
+        }),
       ),
     );
-    final data = await _decodeObj(res);
-    return QrAccessData.fromJson(data);
+    return _decodeObj(res);
+  }
+
+  Future<Map<String, dynamic>> fetchHotelReviews(String hotelId) async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/reviews/hotel/$hotelId'),
+      headers: _headers(jsonBody: false),
+    );
+    return _decodeObj(res);
   }
 
   Future<Map<String, dynamic>> openFaacBarrier({
@@ -541,5 +712,113 @@ class ApiClient {
       ),
     );
     await _decodeObj(res);
+  }
+
+  // --- MÉTODOS DE RECEPCIÓN / SOPORTE DE EMERGENCIA ---
+
+  Future<Map<String, dynamic>> fetchReceptionBoard(String hotelId) async {
+    final res = await _authorizedSend(
+      () => http.get(
+        Uri.parse('$baseUrl/hotels/$hotelId/reception-board'),
+        headers: _headers(jsonBody: false),
+      ),
+    );
+    return _decodeObj(res);
+  }
+
+  Future<Map<String, dynamic>> pulseFaacBarrier({
+    required String hotelId,
+    required String direction, // 'ENTRY' | 'EXIT'
+  }) async {
+    final res = await _authorizedSend(
+      () => http.post(
+        Uri.parse('$baseUrl/access/faac/owner-pulse'),
+        headers: _headers(),
+        body: jsonEncode({
+          'hotelId': hotelId,
+          'direction': direction,
+        }),
+      ),
+    );
+    return _decodeObj(res);
+  }
+
+  Future<Map<String, dynamic>> testIotRelay({
+    required String hotelId,
+    String direction = 'ENTRY',
+    bool dryRun = false,
+  }) async {
+    final res = await _authorizedSend(
+      () => http.post(
+        Uri.parse('$baseUrl/access/iot/test-relay'),
+        headers: _headers(),
+        body: jsonEncode({
+          'hotelId': hotelId,
+          'direction': direction,
+          'dryRun': dryRun,
+        }),
+      ),
+    );
+    return _decodeObj(res);
+  }
+
+  Future<Map<String, dynamic>> confirmManualPayment({
+    required String paymentId,
+    required String gatewayRef,
+    String gateway = 'MANUAL_RECEPTION',
+    String? notes,
+    String? reason,
+  }) async {
+    final res = await _authorizedSend(
+      () => http.post(
+        Uri.parse('$baseUrl/payments/confirm-manual'),
+        headers: _headers(),
+        body: jsonEncode({
+          'paymentId': paymentId,
+          'gateway': gateway,
+          'gatewayRef': gatewayRef,
+          if (notes != null) 'notes': notes,
+          if (reason != null) 'reason': reason,
+        }),
+      ),
+    );
+    return _decodeObj(res);
+  }
+
+  // --- MÉTODOS DE LIMPIEZA & CAMARERÍA ---
+
+  Future<Map<String, dynamic>> fetchCleaningBoard(String hotelId) async {
+    final res = await _authorizedSend(
+      () => http.get(
+        Uri.parse('$baseUrl/hotels/$hotelId/cleaning-board'),
+        headers: _headers(jsonBody: false),
+      ),
+    );
+    return _decodeObj(res);
+  }
+
+  Future<Map<String, dynamic>> updateRoomStatus({
+    required String roomId,
+    required String status,
+  }) async {
+    final endpoint = _currentRole == 'CLEANING' ? 'cleaning-status' : 'status';
+    final res = await _authorizedSend(
+      () => http.put(
+        Uri.parse('$baseUrl/rooms/$roomId/$endpoint'),
+        headers: _headers(),
+        body: jsonEncode({'status': status}),
+      ),
+    );
+    return _decodeObj(res);
+  }
+
+  Future<Map<String, dynamic>> deliverRoomServiceOrder(String orderId) async {
+    final res = await _authorizedSend(
+      () => http.put(
+        Uri.parse('$baseUrl/reservations/orders/$orderId/deliver'),
+        headers: _headers(jsonBody: false),
+      ),
+    );
+    return _decodeObj(res);
   }
 }

@@ -100,6 +100,41 @@ async function handleGuestOpenFaac(request, reply) {
     })
   }
 
+  // Si el huésped acciona la barrera de salida, desocupa la habitación:
+  // Se completa la estadía, se invalida el QR y la habitación pasa a 'Requiere Limpieza' (CLEANING)
+  if (direction === 'EXIT') {
+    await prisma.$transaction([
+      prisma.reservation.update({
+        where: { id: reservation.id },
+        data: { status: 'COMPLETED', checkOut: new Date() },
+      }),
+      prisma.room.update({
+        where: { id: reservation.roomId },
+        data: { status: 'CLEANING' },
+      }),
+    ])
+    await invalidateQrToken(reservation.id)
+
+    emitRealtimeEvent({
+      hotelId: reservation.room.hotel.id,
+      guestId: reservation.guestId,
+      reservationId: reservation.id,
+      type: 'ROOM_STATUS_CHANGED',
+      payload: {
+        roomId: reservation.roomId,
+        roomName: reservation.room.name,
+        status: 'CLEANING',
+        reason: 'GUEST_FAAC_EXIT',
+      },
+      cleaningSafePayload: {
+        roomId: reservation.roomId,
+        roomName: reservation.room.name,
+        status: 'CLEANING',
+        reason: 'GUEST_FAAC_EXIT',
+      },
+    })
+  }
+
   const faacPulse = triggerFaacBarrierPulse({
     hotelId: reservation.room.hotel.id,
     guestId: reservation.guestId,
@@ -338,6 +373,66 @@ async function handleTestFaacRelay(request, reply) {
   return reply.send(diagnostic)
 }
 
+const offlineSyncSchema = z.object({
+  hotelId: z.string().uuid(),
+  deviceId: z.string().min(1),
+  events: z.array(
+    z.object({
+      token: z.string().min(10),
+      timestamp: z.union([z.string(), z.number()]),
+      granted: z.boolean(),
+      reason: z.string().optional(),
+    })
+  ).min(1),
+})
+
+// POST /api/v1/access/iot/offline-sync
+// Recibe eventos de apertura concedidos offline por el ESP32 cuando el tótem no tenía conexión
+async function handleIotOfflineSync(request, reply) {
+  const data = offlineSyncSchema.parse(request.body)
+  const iotToken =
+    request.headers['x-hotel-iot-token'] ||
+    request.headers['x-hotel-bridge-token'] ||
+    ''
+
+  if (!validateHotelIotToken(data.hotelId, String(iotToken))) {
+    return reply.status(401).send({ message: 'Token de controladora IoT inválido' })
+  }
+
+  const { hashQrToken } = require('../../utils/crypto')
+  let syncedCount = 0
+
+  for (const item of data.events) {
+    const tokenHash = hashQrToken(item.token)
+    const accessToken = await prisma.accessToken.findUnique({
+      where: { tokenHash },
+    })
+
+    if (accessToken) {
+      await prisma.accessToken.update({
+        where: { id: accessToken.id },
+        data: { usedCount: { increment: 1 } },
+      })
+      await prisma.accessLog.create({
+        data: {
+          accessTokenId: accessToken.id,
+          event: item.granted ? 'OPEN' : 'DENIED',
+          deviceId: data.deviceId,
+          ipAddress: request.ip,
+          metadata: {
+            offlineBuffered: true,
+            offlineTimestamp: item.timestamp,
+            reason: item.reason || null,
+          },
+        },
+      })
+      syncedCount++
+    }
+  }
+
+  return reply.send({ ok: true, syncedCount, totalReceived: data.events.length })
+}
+
 module.exports = {
   handleValidateQr,
   handleGuestOpenFaac,
@@ -345,6 +440,7 @@ module.exports = {
   handleCheckout,
   handleGetQr,
   handleIotHeartbeat,
+  handleIotOfflineSync,
   handleListIotDevices,
   handleTestFaacRelay,
 }

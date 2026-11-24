@@ -33,7 +33,7 @@ class MainActivity : FlutterActivity() {
                         val apiBaseUrl = call.argument<String>("apiBaseUrl") ?: ""
                         val hotelId = call.argument<String>("hotelId") ?: ""
                         val bridgeToken = call.argument<String>("bridgeToken") ?: ""
-                        val allowTestSources = call.argument<Boolean>("allowTestSources") ?: true
+                        val allowTestSources = call.argument<Boolean>("allowTestSources") ?: false
 
                         val prefs = applicationContext.getSharedPreferences(
                             BdvNotificationListenerService.PREFS_NAME,
@@ -113,7 +113,7 @@ class MainActivity : FlutterActivity() {
             "enabled" to prefs.getBoolean("enabled", false),
             "apiBaseUrl" to (prefs.getString("apiBaseUrl", "") ?: ""),
             "hotelId" to (prefs.getString("hotelId", "") ?: ""),
-            "allowTestSources" to prefs.getBoolean("allowTestSources", true),
+            "allowTestSources" to prefs.getBoolean("allowTestSources", false),
             "forwardedCount" to prefs.getInt("forwardedCount", 0),
             "pendingQueueCount" to BdvNotificationListenerService.getPendingQueueCount(applicationContext),
             "lastEventSummary" to (prefs.getString("lastEventSummary", "") ?: ""),

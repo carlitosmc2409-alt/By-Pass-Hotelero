@@ -87,6 +87,12 @@ const loginCleaningSchema = z.object({
   pin: z.string().min(4).max(20),
 })
 
+const loginReceptionistSchema = z.object({
+  hotelCode: z.string().max(120).optional(),
+  username: z.string().min(2).max(60),
+  password: z.string().min(4).max(100),
+})
+
 module.exports = {
   registerGuestSchema,
   updatePaymentProfileSchema,
@@ -97,4 +103,5 @@ module.exports = {
   registerOwnerSchema,
   loginOwnerSchema,
   loginCleaningSchema,
+  loginReceptionistSchema,
 }

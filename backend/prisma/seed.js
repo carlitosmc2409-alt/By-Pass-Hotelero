@@ -34,6 +34,7 @@ async function main() {
     holderName: 'Inversiones La Brisa C.A.',
   }
   const staffPinHash = await bcrypt.hash('1234', 10)
+  const receptionPassHash = await bcrypt.hash('Recepcion2026*', 10)
   const defaultSettings = {
     faac: {
       enabled: true,
@@ -51,14 +52,41 @@ async function main() {
         name: 'Elena Turno Nocturno',
         alias: 'camarera1',
         pinHash: staffPinHash,
+        role: 'CLEANING',
+        active: true,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    receptionStaff: [
+      {
+        id: '00000000-0000-4000-8000-000000000902',
+        name: 'Juan Asistencia y Recepción',
+        username: 'juan.recepcion',
+        email: 'juan.recepcion@hotellabrisa.com',
+        phone: '+584141234567',
+        passwordHash: receptionPassHash,
+        role: 'RECEPTIONIST',
         active: true,
         createdAt: new Date().toISOString(),
       },
     ],
   }
+  const hotelCoverPhoto =
+    'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1000&q=80'
+  const hotelGalleryPhotos = [
+    hotelCoverPhoto,
+    'https://images.unsplash.com/photo-1582719508461-905c673771fd?auto=format&fit=crop&w=1000&q=80',
+    'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1000&q=80',
+  ]
+
   const hotel = await prisma.hotel.upsert({
     where: { slug: 'motel-la-brisa-caracas' },
-    update: { paymentInfo, settings: defaultSettings },
+    update: {
+      paymentInfo,
+      settings: defaultSettings,
+      coverPhoto: hotelCoverPhoto,
+      photos: hotelGalleryPhotos,
+    },
     create: {
       ownerId: owner.id,
       name: 'Motel La Brisa',
@@ -69,6 +97,8 @@ async function main() {
       latitude: 10.4806,
       longitude: -66.9036,
       description: 'Disfruta con total privacidad.',
+      coverPhoto: hotelCoverPhoto,
+      photos: hotelGalleryPhotos,
       status: 'ACTIVE',
       paymentInfo,
       settings: defaultSettings,
@@ -86,27 +116,43 @@ async function main() {
       id: '00000000-0000-4000-8000-000000000101',
       name: '101',
       type: 'STANDARD',
+      description: 'Habitación acogedora con iluminación cálida, Smart TV, estacionamiento privado directo y servicio por pasaplatos.',
       pricePerHour: 10,
       pricePerNight: 50,
       amenities: ['WiFi', 'TV', 'Aire acondicionado'],
+      photos: [
+        'https://images.unsplash.com/photo-1631049307264-da0ec9d70304?auto=format&fit=crop&w=900&q=80',
+        'https://images.unsplash.com/photo-1590490360182-c33d57733427?auto=format&fit=crop&w=900&q=80',
+      ],
       sortOrder: 1,
     },
     {
       id: '00000000-0000-4000-8000-000000000102',
       name: '102',
       type: 'DELUXE',
+      description: 'Suite Deluxe con bañera de hidromasaje, cama Queen de lujo, ambiente insonorizado y acceso vehicular con código QR.',
       pricePerHour: 15,
       pricePerNight: 70,
       amenities: ['WiFi', 'TV', 'Aire acondicionado', 'Jacuzzi'],
+      photos: [
+        'https://images.unsplash.com/photo-1578683010236-d716f9a3f461?auto=format&fit=crop&w=900&q=80',
+        'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?auto=format&fit=crop&w=900&q=80',
+      ],
       sortOrder: 2,
     },
     {
       id: '00000000-0000-4000-8000-000000000103',
       name: 'Suite A',
       type: 'SUITE',
+      description: 'Nuestra mejor Suite Boutique con Jacuzzi VIP climatizado, cama King Size, minibar completo y garaje privado.',
       pricePerHour: 25,
       pricePerNight: 100,
       amenities: ['WiFi', 'TV', 'Aire acondicionado', 'Jacuzzi', 'Minibar'],
+      photos: [
+        'https://images.unsplash.com/photo-1618773928121-c32242e63f39?auto=format&fit=crop&w=900&q=80',
+        'https://images.unsplash.com/photo-1560448204-603b3fc33ddc?auto=format&fit=crop&w=900&q=80',
+        'https://images.unsplash.com/photo-1552321554-5fefe8c9ef14?auto=format&fit=crop&w=900&q=80',
+      ],
       sortOrder: 3,
     },
   ]
@@ -114,7 +160,10 @@ async function main() {
   for (const roomData of rooms) {
     await prisma.room.upsert({
       where: { id: roomData.id },
-      update: {},
+      update: {
+        description: roomData.description,
+        photos: roomData.photos,
+      },
       create: {
         hotelId: hotel.id,
         currency: 'USD',

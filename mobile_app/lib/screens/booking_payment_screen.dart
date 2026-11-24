@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../core/api_client.dart';
@@ -70,7 +71,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
       _startTimersForReservation();
     } else if (widget.autoStartHold) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _createOrExtendReservation();
+        unawaited(_createOrExtendReservation());
       });
     }
 
@@ -88,10 +89,13 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
         final evParentId = event['parentReservationId']?.toString();
         if (evPayId == resv.paymentId ||
             evResId == resv.reservationId ||
-            (evParentId != null && evParentId == resv.effectiveQrReservationId)) {
-          _onApprovedNavigate(
-            resv.effectiveQrReservationId,
-            autoDetected: true,
+            (evParentId != null &&
+                evParentId == resv.effectiveQrReservationId)) {
+          unawaited(
+            _onApprovedNavigate(
+              resv.effectiveQrReservationId,
+              autoDetected: true,
+            ),
           );
         }
       }
@@ -116,9 +120,8 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
       if (mounted) _updateRemainingTime();
     });
 
-    // Respaldo de polling cada 3s además del stream SSE instantáneo
     _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      _checkPaymentApprovedSilently();
+      unawaited(_checkPaymentApprovedSilently());
     });
   }
 
@@ -145,7 +148,9 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
           autoDetected: true,
         );
       }
-    } catch (_) {}
+    } on Object {
+      // Ignora error transitorio de red en polling
+    }
   }
 
   Future<void> _onApprovedNavigate(
@@ -159,17 +164,17 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
 
     if (autoDetected) {
       final text = _isRoomServiceFlow
-          ? '🍾 ¡Consumo Pago Móvil BDV confirmado! Preparando entrega por pasaplatos.'
+          ? '🍾 ¡Consumo Pago Móvil confirmado! Preparando entrega por pasaplatos.'
           : _isExtensionFlow
-              ? '⚡ ¡Extensión Pago Móvil BDV verificada! Tu horario QR y barrera FAAC fueron ampliados.'
-              : '⚡ ¡Pago Móvil BDV detectado en vivo! Generando tu llave QR y pase FAAC...';
+              ? '⚡ ¡Extensión Pago Móvil verificada! Tu horario QR fue ampliado.'
+              : '⚡ ¡Pago Móvil detectado en vivo! Generando tu llave QR...';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: AppTheme.accent,
           content: Text(
             text,
-            style: const TextStyle(
-              color: Colors.black,
+            style: TextStyle(
+              color: AppTheme.onAccent,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -218,7 +223,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
         });
         _startTimersForReservation();
       }
-    } catch (e) {
+    } on Object catch (e) {
       if (mounted) {
         setState(() {
           _error = e.toString();
@@ -258,10 +263,10 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
       } else {
         setState(() {
           _statusHint =
-              'Referencia registrada. Escuchando push BDV en tiempo real (SSE activo)...';
+              'Referencia registrada. Verificando con el banco en tiempo real...';
         });
       }
-    } catch (e) {
+    } on Object catch (e) {
       if (mounted) {
         setState(() {
           _error = e.toString();
@@ -300,15 +305,16 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
     final expired = resv != null && _remainingHold.inSeconds <= 0;
 
     final title = _isRoomServiceFlow
-        ? 'Pago Room Service · Pasaplatos'
+        ? 'Pago Room Service'
         : _isExtensionFlow
             ? 'Extender Estadía · Hab. ${widget.room.name}'
-            : 'Reserva Privada · Hab. ${widget.room.name}';
+            : 'Reservar Suite ${widget.room.name}';
 
     return Scaffold(
       appBar: AppBar(
         title: Text(title),
         actions: [
+          AppTheme.themeToggleButton(),
           IconButton(
             tooltip: 'Modo Camuflaje',
             onPressed: StealthCalculatorScreen.enable,
@@ -320,7 +326,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
         padding: const EdgeInsets.all(20),
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520),
+            constraints: const BoxConstraints(maxWidth: 500),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -329,7 +335,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
                       gradient: AppTheme.roomTierGradient(widget.room.type),
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(18),
                       border: Border.all(
                         color: AppTheme.roomTierAccent(widget.room.type)
                             .withValues(alpha: 0.35),
@@ -347,8 +353,8 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                                 vertical: 4,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.35),
-                                borderRadius: BorderRadius.circular(20),
+                                color: AppTheme.card.withValues(alpha: 0.75),
+                                borderRadius: BorderRadius.circular(16),
                               ),
                               child: Text(
                                 AppTheme.roomTierLabel(widget.room.type),
@@ -360,16 +366,16 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                                 ),
                               ),
                             ),
-                            const Row(
+                            Row(
                               children: [
                                 Icon(
                                   Icons.directions_car_filled_outlined,
                                   size: 16,
                                   color: AppTheme.cyan,
                                 ),
-                                SizedBox(width: 4),
+                                const SizedBox(width: 4),
                                 Text(
-                                  'Pase FAAC incluido',
+                                  'Pase vehicular incluido',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: AppTheme.cyan,
@@ -383,17 +389,18 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                         const SizedBox(height: 12),
                         Text(
                           '${widget.hotel.name} · Habitación ${widget.room.name}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 19,
                             fontWeight: FontWeight.bold,
+                            color: AppTheme.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           _isExtensionFlow
-                              ? 'Amplía tu tiempo sin llamar a recepción. Tu mismo QR seguirá abriendo puerta y barrera FAAC.'
-                              : 'Selecciona tus horas de reserva privada. Tu QR abrirá la barrera vehicular FAAC y la cerradura de la suite.',
-                          style: const TextStyle(
+                              ? 'Amplía tu tiempo sin llamar a recepción. Tu mismo QR seguirá activo.'
+                              : 'Elige la duración de tu estadía. Recibirás una llave QR para la barrera y la habitación.',
+                          style: TextStyle(
                             color: AppTheme.textSecondary,
                             fontSize: 12.5,
                           ),
@@ -410,8 +417,8 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                         children: [
                           Text(
                             _isExtensionFlow
-                                ? 'Horas adicionales a sumar'
-                                : 'Duración de tu estadía',
+                                ? 'Horas adicionales'
+                                : '1. Elige la duración',
                             style: const TextStyle(
                               fontSize: 15.5,
                               fontWeight: FontWeight.w700,
@@ -424,20 +431,22 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                             children: [1, 2, 3, 4, 6, 24].map((h) {
                               final selected = _selectedHours == h;
                               final label = h == 24
-                                  ? 'Amanecida (24h)'
-                                  : (_isExtensionFlow ? '+$h hora${h > 1 ? "s" : ""}' : '$h hora${h > 1 ? "s" : ""}');
+                                  ? '24 Horas (Amanecida)'
+                                  : (_isExtensionFlow
+                                      ? '+$h hora${h > 1 ? "s" : ""}'
+                                      : '$h hora${h > 1 ? "s" : ""}');
                               return ChoiceChip(
                                 label: Text(
                                   label,
                                   style: TextStyle(
                                     fontWeight: FontWeight.w700,
                                     color: selected
-                                        ? Colors.black
+                                        ? AppTheme.onPrimary
                                         : AppTheme.textPrimary,
                                   ),
                                 ),
                                 selected: selected,
-                                selectedColor: AppTheme.gold,
+                                selectedColor: AppTheme.primary,
                                 onSelected: (_) =>
                                     setState(() => _selectedHours = h),
                               );
@@ -447,16 +456,19 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text(
-                                'Total estimado:',
+                              Text(
+                                'Total a pagar:',
                                 style: TextStyle(color: AppTheme.textSecondary),
                               ),
                               Text(
                                 '\$${_estimatedUsd.toStringAsFixed(2)} USD',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 22,
                                   fontWeight: FontWeight.w800,
-                                  color: AppTheme.gold,
+                                  color: AppTheme.primary,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
                                 ),
                               ),
                             ],
@@ -471,16 +483,16 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                       padding: const EdgeInsets.only(bottom: 12),
                       child: Text(
                         _error!,
-                        style: const TextStyle(color: AppTheme.danger),
+                        style: TextStyle(color: AppTheme.danger),
                       ),
                     ),
                   ElevatedButton.icon(
                     onPressed: _loading ? null : _createOrExtendReservation,
-                    icon: const Icon(Icons.bolt_rounded),
+                    icon: const Icon(Icons.payments_outlined),
                     label: Text(
                       _isExtensionFlow
-                          ? 'Bloquear tasa BCV y extender estadía'
-                          : 'Bloquear habitación y pagar con Pago Móvil',
+                          ? 'Continuar al Pago Móvil'
+                          : 'Ver datos de Pago Móvil',
                     ),
                   ),
                 ] else ...[
@@ -495,7 +507,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
                         color: (expired ? AppTheme.danger : AppTheme.gold)
-                            .withValues(alpha: 0.4),
+                            .withValues(alpha: 0.35),
                       ),
                     ),
                     child: Row(
@@ -513,8 +525,8 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                             const SizedBox(width: 8),
                             Text(
                               expired
-                                  ? 'Ventana de tasa bloqueada expirada'
-                                  : 'Tasa BCV garantizada · Escucha SSE en vivo:',
+                                  ? 'Tiempo de reserva expirado'
+                                  : 'Tasa BCV bloqueada por:',
                               style: const TextStyle(
                                 fontSize: 12.5,
                                 fontWeight: FontWeight.w600,
@@ -527,6 +539,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w800,
+                            fontFeatures: const [FontFeature.tabularFigures()],
                             color: expired ? AppTheme.danger : AppTheme.gold,
                           ),
                         ),
@@ -543,34 +556,35 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                           Row(
                             children: [
                               Container(
-                                padding: const EdgeInsets.all(7),
+                                padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
-                                  color: AppTheme.accent.withValues(alpha: 0.14),
+                                  color:
+                                      AppTheme.accent.withValues(alpha: 0.14),
                                   borderRadius: BorderRadius.circular(10),
                                 ),
-                                child: const Icon(
-                                  Icons.flash_on_rounded,
+                                child: Icon(
+                                  Icons.check_circle_outline_rounded,
                                   color: AppTheme.accent,
                                   size: 20,
                                 ),
                               ),
                               const SizedBox(width: 10),
-                              const Expanded(
+                              Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'Conciliación Cero-Clics · Banco de Venezuela',
+                                      'Datos para tu Pago Móvil',
                                       style: TextStyle(
                                         fontWeight: FontWeight.w700,
-                                        fontSize: 14.5,
-                                        color: AppTheme.accent,
+                                        fontSize: 15,
+                                        color: AppTheme.textPrimary,
                                       ),
                                     ),
                                     Text(
-                                      'Detección SSE en tiempo real sin enviar capturas',
+                                      'Transfiere el monto exacto en Bs. y tu QR se activará al instante',
                                       style: TextStyle(
-                                        fontSize: 11.5,
+                                        fontSize: 12,
                                         color: AppTheme.textSecondary,
                                       ),
                                     ),
@@ -580,26 +594,46 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                             ],
                           ),
                           const Divider(height: 24),
+                          if ((receptor['bank'] == null || receptor['phone'] == null || receptor['idNumber'] == null))
+                            Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.amber.shade700),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.warning_amber_rounded, color: Colors.amber.shade700),
+                                  const SizedBox(width: 8),
+                                  const Expanded(
+                                    child: Text(
+                                      'Atención: El hotel no ha completado sus datos bancarios de Pago Móvil. Confirme con recepción antes de transferir.',
+                                      style: TextStyle(fontSize: 12, color: Colors.white70),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           _copyableRow(
-                            'Banco receptor',
-                            '${receptor['bank'] ?? '0102'} — ${receptor['bankName'] ?? 'Banco de Venezuela'}',
-                            copyText: (receptor['bank'] ?? '0102').toString(),
+                            'Banco',
+                            '${receptor['bank'] ?? 'N/D'} — ${receptor['bankName'] ?? 'No especificado'}',
+                            copyText: (receptor['bank'] ?? '').toString(),
                           ),
                           _copyableRow(
-                            'Teléfono Pago Móvil',
-                            receptor['phone']?.toString() ?? '+584121234567',
-                            copyText:
-                                receptor['phone']?.toString() ?? '+584121234567',
+                            'Teléfono',
+                            receptor['phone']?.toString() ?? 'No especificado',
+                            copyText: receptor['phone']?.toString() ?? '',
                           ),
                           _copyableRow(
                             'RIF / Cédula',
-                            receptor['idNumber']?.toString() ?? 'J-50123456-7',
-                            copyText:
-                                receptor['idNumber']?.toString() ?? 'J-50123456-7',
+                            receptor['idNumber']?.toString() ?? 'No especificado',
+                            copyText: receptor['idNumber']?.toString() ?? '',
                           ),
                           _copyableRow(
-                            'Equivalente USD · Tasa BCV',
-                            '\$${resv.totalAmount.toStringAsFixed(2)} · Bs. ${resv.exchangeRate.toStringAsFixed(2)}',
+                            'Equivalente USD (BCV)',
+                            '\$${resv.totalAmount.toStringAsFixed(2)} · Tasa Bs. ${resv.exchangeRate.toStringAsFixed(2)}',
                           ),
                           const SizedBox(height: 12),
                           InkWell(
@@ -611,22 +645,17 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                             child: Container(
                               padding: const EdgeInsets.all(15),
                               decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    AppTheme.accent.withValues(alpha: 0.18),
-                                    AppTheme.gold.withValues(alpha: 0.10),
-                                  ],
-                                ),
+                                color: AppTheme.accent.withValues(alpha: 0.12),
                                 borderRadius: BorderRadius.circular(14),
                                 border: Border.all(
-                                  color: AppTheme.accent.withValues(alpha: 0.45),
+                                  color: AppTheme.accent.withValues(alpha: 0.35),
                                 ),
                               ),
                               child: Row(
                                 mainAxisAlignment:
                                     MainAxisAlignment.spaceBetween,
                                 children: [
-                                  const Expanded(
+                                  Expanded(
                                     child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
@@ -636,13 +665,13 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                                           style: TextStyle(
                                             fontWeight: FontWeight.w800,
                                             fontSize: 11,
-                                            letterSpacing: 0.6,
+                                            letterSpacing: 0.5,
                                             color: AppTheme.accent,
                                           ),
                                         ),
-                                        SizedBox(height: 2),
+                                        const SizedBox(height: 2),
                                         Text(
-                                          'Toca para copiar con decimales exactos',
+                                          'Toca para copiar con decimales',
                                           style: TextStyle(
                                             fontSize: 11.5,
                                             color: AppTheme.textSecondary,
@@ -655,17 +684,20 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                                     children: [
                                       Text(
                                         'Bs. ${resv.amountVes.toStringAsFixed(2)}',
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontSize: 20,
                                           fontWeight: FontWeight.w800,
+                                          fontFeatures: const [
+                                            FontFeature.tabularFigures(),
+                                          ],
                                           color: AppTheme.textPrimary,
                                         ),
                                       ),
                                       const SizedBox(width: 6),
-                                      const Icon(
+                                      Icon(
                                         Icons.copy_rounded,
                                         size: 17,
-                                        color: AppTheme.gold,
+                                        color: AppTheme.primary,
                                       ),
                                     ],
                                   ),
@@ -685,7 +717,8 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                                     'Monto: ${resv.amountVes.toStringAsFixed(2)}';
                                 _copyValue('Datos Pago Móvil', summary);
                               },
-                              icon: const Icon(Icons.copy_all_rounded, size: 16),
+                              icon:
+                                  const Icon(Icons.copy_all_rounded, size: 16),
                               label: const Text('Copiar todos los datos'),
                             ),
                           ),
@@ -695,7 +728,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                             keyboardType: TextInputType.number,
                             decoration: const InputDecoration(
                               labelText:
-                                  'Últimos dígitos de referencia (opcional en Cero-Clics)',
+                                  'Últimos dígitos de referencia (si pagas desde otro teléfono)',
                               hintText: 'Ej: 987654',
                               prefixIcon: Icon(Icons.receipt_long_outlined),
                             ),
@@ -704,7 +737,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                             const SizedBox(height: 12),
                             Row(
                               children: [
-                                const SizedBox(
+                                SizedBox(
                                   width: 14,
                                   height: 14,
                                   child: CircularProgressIndicator(
@@ -716,7 +749,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                                 Expanded(
                                   child: Text(
                                     _statusHint!,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       color: AppTheme.accent,
                                       fontSize: 12.5,
                                     ),
@@ -729,7 +762,7 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                             const SizedBox(height: 12),
                             Text(
                               _error!,
-                              style: const TextStyle(color: AppTheme.danger),
+                              style: TextStyle(color: AppTheme.danger),
                             ),
                           ],
                           const SizedBox(height: 18),
@@ -737,19 +770,19 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
                             onPressed:
                                 (_loading || expired) ? null : _submitReference,
                             icon: _loading
-                                ? const SizedBox(
+                                ? SizedBox(
                                     height: 18,
                                     width: 18,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
-                                      color: Colors.black,
+                                      color: AppTheme.onPrimary,
                                     ),
                                   )
                                 : const Icon(Icons.verified_rounded),
                             label: Text(
                               _isRoomServiceFlow
-                                  ? 'Confirmar referencia de Room Service'
-                                  : 'Reportar referencia y activar Llave QR',
+                                  ? 'Confirmar Pago de Pedido'
+                                  : 'Confirmar Pago y Activar Llave QR',
                             ),
                           ),
                         ],
@@ -767,34 +800,35 @@ class _BookingPaymentScreenState extends State<BookingPaymentScreen> {
 
   Widget _copyableRow(String label, String value, {String? copyText}) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.5),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
             label,
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
                 value,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w600,
                   fontSize: 13,
+                  color: AppTheme.textPrimary,
                 ),
               ),
               if (copyText != null) ...[
                 const SizedBox(width: 6),
                 InkWell(
                   onTap: () => _copyValue(label, copyText),
-                  child: const Padding(
-                    padding: EdgeInsets.all(4),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
                     child: Icon(
                       Icons.copy_rounded,
                       size: 15,
-                      color: AppTheme.gold,
+                      color: AppTheme.primary,
                     ),
                   ),
                 ),

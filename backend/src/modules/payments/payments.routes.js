@@ -9,19 +9,25 @@ async function paymentsRoutes(fastify) {
   // Webhook para agente lector de notificaciones BDV (o simulador externo)
   fastify.post('/webhook/bdv-notification', ctrl.handleBdvNotificationWebhook)
 
-  // Propietario confirma pago manualmente (respaldo)
-  fastify.post('/:paymentId/confirm', {
+  // Heartbeat y salud en vivo del puente Android BDV
+  fastify.post('/webhook/bdv-bridge/heartbeat', ctrl.handleBdvBridgeHeartbeat)
+  fastify.get('/bdv-bridge/status/:hotelId', {
     preHandler: [fastify.authenticate, fastify.authorizeOwner],
+  }, ctrl.handleGetBdvBridgeStatus)
+
+  // Propietario o recepcionista confirma pago manualmente (contingencia)
+  fastify.post('/:paymentId/confirm', {
+    preHandler: [fastify.authenticate, fastify.authorizeReceptionistOrOwner],
   }, ctrl.handleConfirmPayment)
 
-  // Propietario rechaza pago
+  // Propietario o recepcionista rechaza pago
   fastify.post('/:paymentId/reject', {
-    preHandler: [fastify.authenticate, fastify.authorizeOwner],
+    preHandler: [fastify.authenticate, fastify.authorizeReceptionistOrOwner],
   }, ctrl.handleRejectPayment)
 
-  // Propietario: pagos pendientes de un hotel
+  // Propietario o recepcionista: pagos pendientes de un hotel
   fastify.get('/pending/:hotelId', {
-    preHandler: [fastify.authenticate, fastify.authorizeOwner],
+    preHandler: [fastify.authenticate, fastify.authorizeReceptionistOrOwner],
   }, ctrl.handleListPending)
 }
 

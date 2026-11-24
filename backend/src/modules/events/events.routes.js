@@ -1,4 +1,5 @@
 const { prisma } = require('../../config/database')
+const env = require('../../config/env')
 const { validateHotelBridgeToken } = require('../../utils/crypto')
 const { subscribeRealtime } = require('../../utils/eventBus')
 
@@ -42,7 +43,7 @@ async function eventsRoutes(fastify) {
         return reply.status(401).send({ message: 'Credencial de puente IoT/FAAC inválida' })
       }
       principal = { role: 'IOT_BRIDGE', hotelId: String(query.hotelId) }
-    } else if (query.hotelId && query.scope === 'kiosk') {
+    } else if (query.hotelId && query.scope === 'kiosk' && env.isDev()) {
       principal = { role: 'IOT_BRIDGE', hotelId: String(query.hotelId) }
     } else {
       return reply.status(401).send({ message: 'Autenticación requerida para el stream en vivo' })
@@ -95,12 +96,25 @@ async function eventsRoutes(fastify) {
         return
       }
 
+      if (principal.role === 'RECEPTIONIST') {
+        if (evt.hotelId === principal.hotelId) {
+          sendEvent('message', {
+            type: evt.type,
+            hotelId: evt.hotelId,
+            reservationId: evt.reservationId,
+            payload: evt.payload,
+            timestamp: evt.timestamp,
+          })
+        }
+        return
+      }
+
       if (principal.role === 'CLEANING') {
         if (evt.hotelId === principal.hotelId && CLEANING_ALLOWED_TYPES.has(evt.type)) {
           sendEvent('message', {
             type: evt.type,
             hotelId: evt.hotelId,
-            payload: evt.cleaningSafePayload || {},
+            payload: evt.cleaningSafePayload || evt.payload || {},
             timestamp: evt.timestamp,
           })
         }

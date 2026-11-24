@@ -26,19 +26,19 @@ async function reservationsRoutes(fastify) {
     preHandler: [fastify.authenticate],
   }, ctrl.handleListRoomServiceOrders)
 
-  // Personal de limpieza o propietario: marcar pedido Room Service entregado en pasaplatos
+  // Personal de limpieza, recepcionista o propietario: marcar pedido Room Service entregado en pasaplatos
   fastify.patch('/:orderId/deliver-order', {
-    preHandler: [fastify.authenticate, fastify.authorizeCleaningOrOwner],
+    preHandler: [fastify.authenticate, fastify.authorizeStaffOrOwner],
   }, ctrl.handleDeliverRoomServiceOrder)
 
-  // Huésped o propietario: detalle de reserva
+  // Huésped o personal: detalle de reserva
   fastify.get('/:id', {
     preHandler: [fastify.authenticate],
   }, ctrl.handleGetOne)
 
-  // Propietario: reservas de un hotel
+  // Propietario o recepcionista: reservas de un hotel
   fastify.get('/hotel/:hotelId', {
-    preHandler: [fastify.authenticate, fastify.authorizeOwner],
+    preHandler: [fastify.authenticate, fastify.authorizeReceptionistOrOwner],
   }, ctrl.handleListByHotel)
 }
 

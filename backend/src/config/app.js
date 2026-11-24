@@ -6,6 +6,7 @@ const env = require('./env')
 
 async function buildApp() {
   const app = Fastify({
+    bodyLimit: 12 * 1024 * 1024, // 12 MB para permitir subida de fotografías en Base64 / URL
     logger: {
       level: env.isDev() ? 'info' : 'warn',
       transport: env.isDev()
@@ -87,6 +88,28 @@ async function buildApp() {
     }
   })
 
+  // Verifica que el usuario sea recepcionista (RECEPTIONIST) o propietario (OWNER)
+  app.decorate('authorizeReceptionistOrOwner', async function (request, reply) {
+    if (request.user?.role !== 'OWNER' && request.user?.role !== 'RECEPTIONIST') {
+      reply.status(403).send({
+        statusCode: 403,
+        error: 'Forbidden',
+        message: 'Acceso solo para recepción o propietario',
+      })
+    }
+  })
+
+  // Verifica que el usuario sea cualquier personal (OWNER, RECEPTIONIST, CLEANING)
+  app.decorate('authorizeStaffOrOwner', async function (request, reply) {
+    if (!['OWNER', 'RECEPTIONIST', 'CLEANING'].includes(request.user?.role)) {
+      reply.status(403).send({
+        statusCode: 403,
+        error: 'Forbidden',
+        message: 'Acceso restringido a personal autorizado del hotel',
+      })
+    }
+  })
+
   // Verifica que el usuario autenticado sea huésped
   app.decorate('authorizeGuest', async function (request, reply) {
     if (request.user?.role !== 'GUEST') {
@@ -115,6 +138,8 @@ async function buildApp() {
   app.register(require('../modules/payments/payments.routes'), { prefix: `${prefix}/payments` })
   app.register(require('../modules/access/access.routes'), { prefix: `${prefix}/access` })
   app.register(require('../modules/events/events.routes'), { prefix: `${prefix}/events` })
+  app.register(require('../modules/integrations/integrations.routes'), { prefix: `${prefix}/integrations` })
+  app.register(require('../modules/reviews/reviews.routes'), { prefix: `${prefix}/reviews` })
 
   // ── Error handler global ──────────────────────────────────
   app.setErrorHandler((error, request, reply) => {

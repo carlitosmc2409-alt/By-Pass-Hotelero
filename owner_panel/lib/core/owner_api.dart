@@ -464,27 +464,42 @@ class OwnerApiClient {
     return data as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> createCleaningStaff({
+  Future<Map<String, dynamic>> createStaff({
     required String hotelId,
+    required String role, // 'RECEPTIONIST' | 'CLEANING'
     required String name,
-    required String alias,
-    required String pin,
+    String? alias,
+    String? username,
+    String? pin,
+    String? password,
+    String? phone,
+    String? email,
   }) async {
+    final effectiveAlias = alias ?? username ?? '';
+    final effectivePin = pin ?? password ?? '';
+    final effectiveUsername = username ?? alias ?? '';
+    final effectivePassword = password ?? pin ?? '';
+
     final data = await _sendWithRefresh(
       () => http.post(
         Uri.parse('$baseUrl/hotels/$hotelId/staff'),
         headers: _headers(),
         body: jsonEncode({
+          'role': role,
           'name': name,
-          'alias': alias,
-          'pin': pin,
+          'alias': effectiveAlias,
+          'username': effectiveUsername,
+          'pin': effectivePin,
+          'password': effectivePassword,
+          if (phone != null && phone.isNotEmpty) 'phone': phone,
+          if (email != null && email.isNotEmpty) 'email': email,
         }),
       ),
     );
     return data as Map<String, dynamic>;
   }
 
-  Future<void> deleteCleaningStaff({
+  Future<void> deleteStaff({
     required String hotelId,
     required String staffId,
   }) async {
@@ -496,6 +511,18 @@ class OwnerApiClient {
     );
   }
 
+  Future<Map<String, dynamic>> createCleaningStaff({
+    required String hotelId,
+    required String name,
+    required String alias,
+    required String pin,
+  }) => createStaff(hotelId: hotelId, role: 'CLEANING', name: name, alias: alias, pin: pin);
+
+  Future<void> deleteCleaningStaff({
+    required String hotelId,
+    required String staffId,
+  }) => deleteStaff(hotelId: hotelId, staffId: staffId);
+
   Future<void> createRoom({
     required String hotelId,
     required String name,
@@ -503,6 +530,8 @@ class OwnerApiClient {
     required double pricePerHour,
     required double pricePerNight,
     required List<String> amenities,
+    String? description,
+    List<String>? photos,
   }) async {
     await _sendWithRefresh(
       () => http.post(
@@ -515,6 +544,55 @@ class OwnerApiClient {
           'pricePerHour': pricePerHour,
           'pricePerNight': pricePerNight,
           'amenities': amenities,
+          if (description != null) 'description': description,
+          if (photos != null) 'photos': photos,
+        }),
+      ),
+    );
+  }
+
+  Future<void> updateRoom({
+    required String roomId,
+    String? name,
+    String? type,
+    double? pricePerHour,
+    double? pricePerNight,
+    List<String>? amenities,
+    String? description,
+    List<String>? photos,
+  }) async {
+    await _sendWithRefresh(
+      () => http.put(
+        Uri.parse('$baseUrl/rooms/$roomId'),
+        headers: _headers(),
+        body: jsonEncode({
+          if (name != null) 'name': name,
+          if (type != null) 'type': type,
+          if (pricePerHour != null) 'pricePerHour': pricePerHour,
+          if (pricePerNight != null) 'pricePerNight': pricePerNight,
+          if (amenities != null) 'amenities': amenities,
+          if (description != null) 'description': description,
+          if (photos != null) 'photos': photos,
+        }),
+      ),
+    );
+  }
+
+  Future<void> updateHotelPhotos({
+    required String hotelId,
+    String? coverPhoto,
+    List<String>? photos,
+    String? description,
+  }) async {
+    await _sendWithRefresh(
+      () => http.put(
+        Uri.parse('$baseUrl/hotels/$hotelId'),
+        headers: _headers(),
+        body: jsonEncode({
+          'coverPhoto': coverPhoto,
+          if (photos != null) 'photos': photos,
+          if (description != null && description.isNotEmpty)
+            'description': description,
         }),
       ),
     );
@@ -548,12 +626,23 @@ class OwnerApiClient {
     );
   }
 
-  Future<void> confirmPaymentManually(String paymentId) async {
+  Future<void> confirmPaymentManually(
+    String paymentId, {
+    String? gateway,
+    String? gatewayRef,
+    String? notes,
+    String? reason,
+  }) async {
     await _sendWithRefresh(
       () => http.post(
         Uri.parse('$baseUrl/payments/$paymentId/confirm'),
         headers: _headers(),
-        body: jsonEncode({}),
+        body: jsonEncode({
+          if (gateway != null) 'gateway': gateway,
+          if (gatewayRef != null) 'gatewayRef': gatewayRef,
+          if (notes != null) 'notes': notes,
+          if (reason != null) 'reason': reason,
+        }),
       ),
     );
   }
