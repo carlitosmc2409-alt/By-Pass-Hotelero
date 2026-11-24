@@ -35,7 +35,7 @@ const char* WIFI_SSID       = "RED_MOTEL_IOT";
 const char* WIFI_PASSWORD   = "CLAVE_WIFI_SEGURA";
 
 // URL del backend StayPass (IP local del servidor o dominio HTTPS en la nube)
-const char* API_BASE_URL    = "http://192.168.1.10:3000/api/v1";
+const char* API_BASE_URL    = "https://by-pass-hotelero.vercel.app/api/v1";
 
 // Identificadores exclusivos del Hotel y de este Tótem (copiar desde Panel -> FAAC)
 const char* HOTEL_ID        = "PEGAR_HOTEL_UUID_AQUI";

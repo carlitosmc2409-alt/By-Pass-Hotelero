@@ -19,7 +19,7 @@ require(path.resolve(__dirname, '..', 'backend', 'node_modules', 'dotenv')).conf
   path: path.resolve(__dirname, '..', 'backend', '.env'),
 })
 
-const API_BASE = process.env.API_BASE_URL || 'http://localhost:3000/api/v1'
+const API_BASE = process.env.API_BASE_URL || 'https://by-pass-hotelero.vercel.app/api/v1'
 const PORT = Number(process.env.VIRTUAL_FAAC_PORT || 3090)
 const startedAt = Date.now()
 

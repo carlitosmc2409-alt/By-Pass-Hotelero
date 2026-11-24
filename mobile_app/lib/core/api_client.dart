@@ -34,9 +34,12 @@ class ApiClient {
   static String _resolveInitialBaseUrl() {
     if (_compiledBaseUrl.isNotEmpty) return _compiledBaseUrl;
     if (kIsWeb && Uri.base.host.isNotEmpty) {
-      return 'http://${Uri.base.host}:3000/api/v1';
+      if (Uri.base.host.contains('vercel.app') || Uri.base.scheme == 'https') {
+        return '${Uri.base.origin}/api/v1';
+      }
+      return 'https://by-pass-hotelero.vercel.app/api/v1';
     }
-    return 'http://localhost:3000/api/v1';
+    return 'https://by-pass-hotelero.vercel.app/api/v1';
   }
 
   static Future<void> setCustomBaseUrl(String url) async {
