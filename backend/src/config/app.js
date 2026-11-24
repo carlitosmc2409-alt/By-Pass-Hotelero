@@ -22,9 +22,7 @@ async function buildApp() {
   })
 
   await app.register(cors, {
-    origin: env.isProd()
-      ? ['https://tudominio.com'] // reemplazar en producción
-      : true,
+    origin: true,
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
